@@ -4,7 +4,7 @@ import io.grpc.ManagedChannel;
 import lombok.val;
 import org.saidone.protoalf.client.AlfrescoGrpcChannels;
 import org.saidone.protoalf.client.AuthenticationServiceClient;
-import org.saidone.protoalf.client.BulkImportExporter;
+import org.saidone.protoalf.client.BulkExporter;
 import org.saidone.protoalf.client.NodeServiceClient;
 import org.saidone.protoalf.client.TicketProvider;
 import org.springframework.ai.tool.ToolCallbackProvider;
@@ -46,7 +46,7 @@ public class AlfrescoConfiguration {
     @Bean
     ExportTools exportTools(ManagedChannel alfrescoGrpcChannel, TicketProvider tickets, AlfrescoProperties properties) {
         val client = new NodeServiceClient(alfrescoGrpcChannel, tickets, properties.export().deadline());
-        return new ExportTools(new BulkImportExporter(client), properties.export().directory());
+        return new ExportTools(new BulkExporter(client), properties.export().directory());
     }
 
     /** Picked up by the Spring AI MCP server auto-configuration and published as MCP tools. */

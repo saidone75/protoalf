@@ -1,7 +1,7 @@
 package org.saidone.protoalf.mcp;
 
 import lombok.val;
-import org.saidone.protoalf.client.BulkImportExporter;
+import org.saidone.protoalf.client.BulkExporter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
@@ -30,7 +30,7 @@ public class ExportTools implements AutoCloseable {
     private static final Pattern DIRECTORY_NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,99}");
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
-    private final BulkImportExporter exporter;
+    private final BulkExporter exporter;
     private final Path directory;
     private final Map<String, Export> exports = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor(task -> {
@@ -40,7 +40,7 @@ public class ExportTools implements AutoCloseable {
     });
 
     /** @param directory where the exports are written, one subdirectory each */
-    public ExportTools(BulkImportExporter exporter, Path directory) {
+    public ExportTools(BulkExporter exporter, Path directory) {
         this.exporter = exporter;
         this.directory = directory.toAbsolutePath().normalize();
     }
@@ -73,7 +73,7 @@ public class ExportTools implements AutoCloseable {
         if (!isEmpty(target))
             throw new AlfrescoTools.AlfrescoToolException("Directory %s already exists and is not empty".formatted(name), null);
         val export = new Export(UUID.randomUUID().toString(), folderRef, target, Instant.now(),
-                new BulkImportExporter.Progress());
+                new BulkExporter.Progress());
         exports.put(export.id, export);
         executor.submit(() -> run(export, !Boolean.FALSE.equals(recursive)));
         return status(export);
@@ -121,7 +121,7 @@ public class ExportTools implements AutoCloseable {
     }
 
     private record Export(String id, String folderRef, Path target, Instant started,
-                          BulkImportExporter.Progress progress) {
+                          BulkExporter.Progress progress) {
     }
 
     /** Status of an export, as returned to the model. */
