@@ -37,7 +37,7 @@ import java.util.stream.Collectors;
  * <p>
  * Failures of single nodes are recorded in the {@link Progress} and do not stop the export.
  */
-public class BulkImportExporter {
+public class BulkExporter {
 
     public static final String METADATA_SUFFIX = ".metadata.properties.xml";
     /** Separator of the values of a multi-valued property, the default of the Bulk Import Tool. */
@@ -60,7 +60,7 @@ public class BulkImportExporter {
 
     private final NodeServiceClient client;
 
-    public BulkImportExporter(NodeServiceClient client) {
+    public BulkExporter(NodeServiceClient client) {
         this.client = client;
     }
 

@@ -17,17 +17,18 @@ Alfresco repository
 | Path | What |
 |---|---|
 | `proto/protoalf/v1/alfresco.proto` | The gRPC contract. Single source: both modules generate their own stubs from it |
-| `protoalf-platform/` | Alfresco Platform JAR module. `mvn package` produces one shaded JAR (gRPC/Protobuf relocated under `org.saidone.protoalf.platform.internal`). It targets Java 11 and is built against Alfresco 7.0.0, so it runs on Alfresco 7.0 and later |
+| `protoalf-platform/` | Alfresco Platform JAR module. `mvn package` produces one shaded JAR (gRPC/Protobuf relocated under `org.saidone.protoalf.platform.internal`). It targets Java 11 and is built against Alfresco 7.0.0, the Docker stack uses Alfresco 7.0.0 |
 | `protoalf-client/` | Plain Java 17 library (no Spring): generated stubs, ticket login, channel factory and `NodeServiceClient`. Use it from any Java application |
-| `protoalf-mcp/` | Spring Boot app: uses `protoalf-client`, publishes read (`alfresco_search`, `alfresco_get_node`, `alfresco_list_children`, `alfresco_list_models`), write and bulk import export tools over MCP |
+| `protoalf-mcp/` | Spring Boot app: uses `protoalf-client`, publishes read (`alfresco_search`, `alfresco_get_node`, `alfresco_list_children`, `alfresco_list_models`) and write tools over MCP |
 | `examples/java-client/` | Minimal Spring Boot app using `protoalf-client`: logs in, lists Company Home and the last modified documents, then exits |
 | `docker/` | Docker Compose for the whole stack, plus the script generating the gRPC TLS certificates |
-| `run.sh` / `run.bat` | Build and run helpers |
+| `run-docker.sh` | Build Docker images and manage the full development stack (Bash) |
+| `run.sh` / `run.bat` | Original build and run helpers |
 
 ## Run
 
 ```
-./run.sh build_start      # or run.bat build_start
+./run-docker.sh build_start      # Windows: run.bat build_start
 ```
 
 Starts: Alfresco (with the gRPC module), Share, PostgreSQL, Search Services, ActiveMQ and the MCP server.
@@ -39,7 +40,11 @@ Starts: Alfresco (with the gRPC module), Share, PostgreSQL, Search Services, Act
 | gRPC (TLS) | localhost:9090 |
 | MCP server | http://localhost:8090/mcp |
 
-Other tasks: `start`, `stop`, `purge` (also deletes the volumes), `tail`, `tail_all`, `reload_acs`, `reload_mcp`, `build`.
+Requires Docker Compose and Maven with JDK 21 or later. The script works from any directory and honors `JAVA_HOME` and `M2_HOME`.
+
+`build_start` compiles the platform, client and MCP modules, builds the ACS and MCP images, starts the stack and follows its logs. TLS certificates and the dedicated MCP user are prepared automatically; the transform service handles content conversions. Press Ctrl+C to stop following logs while the stack keeps running.
+
+Other tasks: `build` (Maven packages and Docker images), `start` (uses existing Maven artifacts), `stop`, `restart`, `update` (rebuild and start), `status`, `tail`, `tail_all`, `reload_acs`, `reload_mcp`. `purge` also deletes all stack volumes, including repository data, database, indexes and TLS certificates. Ordinary stops and updates preserve volumes.
 
 ## Connect an MCP client
 
@@ -101,7 +106,7 @@ Run it from the module folder, because `alfresco.trust-certificate` in its `appl
 `ca.crt`:
 
 ```
-cd protoalf-example
+cd examples/java-client
 java -jar target/protoalf-example.jar
 ```
 
@@ -165,8 +170,8 @@ model finds the right `TYPE:"..."` for a search or the property names to set wit
 Metadata is passed as property name → text, e.g. `{"cm:title": "Budget", "cm:description": "Draft"}`, converted to the
 property type (dates in ISO 8601). Protected (`cm:created`, ...) and `sys:` properties are rejected; aspects such as
 `cm:titled` are added automatically. Alfresco enforces permissions, locks, unique names (`ALREADY_EXISTS`) and model
-constraints (`FAILED_PRECONDITION`). Requests are limited to `protoalf.max-message-size` (16 MB): that is the
-largest document that can be uploaded.
+constraints (`FAILED_PRECONDITION`). Requests are limited to `protoalf.max-message-size` (16 MB): this limits
+non-streaming requests, including their metadata. For larger documents, use `UploadContent` (see below).
 
 `property_values` (CreateNode, UpdateNode, the UploadContent header) takes a list of values per property, e.g.
 `{"cm:taggable": ["finance", "2026"]}`: a multi-valued property gets the whole list (empty = unset), a single-valued one
@@ -192,35 +197,6 @@ The client of `Login` is `AuthenticationServiceClient`; the other RPCs belong to
 (empty when the document is not versionable): label, major/minor, description, modifier, date and the frozen
 `Node` with the metadata of that version. Its `version_ref` (`versionStore://version2Store/<id>`) is accepted by
 `GetContent` and `DownloadContent` to read the content of that version.
-
-## Bulk import export
-
-`BulkImportExporter` (client module) exports the content of a folder in the layout of the Alfresco Bulk Filesystem
-Import Tool, so it can be imported into another repository:
-
-```
-invoices-2024/
-├── 2024/                                  folder
-├── 2024.metadata.properties.xml           its type, aspects and properties
-├── invoice-001.pdf                        current version
-├── invoice-001.pdf.metadata.properties.xml
-├── invoice-001.pdf.v1                     previous versions, oldest first
-├── invoice-001.pdf.metadata.properties.xml.v1
-├── invoice-001.pdf.v2
-└── invoice-001.pdf.metadata.properties.xml.v2
-```
-
-The shadow files are Java XML properties: `type`, `aspects` (comma-separated) and every property in `prefix:name`
-form, dates in ISO 8601 and multi-valued properties comma-separated. System properties, content, locks and working
-copy data are left out, and so are node references (their ids would not exist in the target repository).
-Permissions and associations are not part of the format.
-
-Version numbers are integers because the importer bundled with Alfresco only recognizes `\.v([0-9]+)` at the end of
-the name: it imports the numbered files in order, then the file without suffix, and assigns new version labels.
-
-The MCP tool `alfresco_export_bulk` runs it in the background into a new directory under `alfresco.export.directory`
-(in Docker `docker/export` on the host) and returns an id; `alfresco_export_status` reports progress, counters and
-the first errors. Failures of single documents do not stop the export.
 
 ## The MCP user
 
@@ -251,7 +227,7 @@ Alfresco module (`alfresco-global.properties` or `-D` options):
 | `protoalf.enabled` | `true` |
 | `protoalf.host` / `protoalf.port` | `127.0.0.1` / `9090` |
 | `protoalf.threads` | `8` |
-| `protoalf.max-message-size` | `16777216` (bytes, largest request / uploaded document) |
+| `protoalf.max-message-size` | `16777216` (bytes, maximum individual gRPC message size) |
 | `protoalf.tls.certificate` / `protoalf.tls.private-key` | empty (plaintext, loopback only) |
 
 MCP server (`application.yml` or environment variables):
@@ -262,5 +238,3 @@ MCP server (`application.yml` or environment variables):
 | `alfresco.grpc.host` / `alfresco.grpc.port` | `ALFRESCO_GRPC_HOST` / `ALFRESCO_GRPC_PORT` | `localhost` / `9090` |
 | `alfresco.grpc.trust-certificate` | `ALFRESCO_GRPC_TRUST_CERTIFICATE` | empty (plaintext) |
 | `alfresco.grpc.deadline` | `ALFRESCO_GRPC_DEADLINE` | `30s` |
-| `alfresco.export.directory` | `ALFRESCO_EXPORT_DIRECTORY` | `export` (in Docker `/export`, mounted from `docker/export`) |
-| `alfresco.export.deadline` | `ALFRESCO_EXPORT_DEADLINE` | `30m` (each call of an export, a whole download included) |
