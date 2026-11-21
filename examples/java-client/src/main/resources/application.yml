@@ -1,0 +1,9 @@
+# Every value can be overridden with environment variables, e.g. ALFRESCO_HOST, ALFRESCO_PASSWORD
+alfresco:
+  host: localhost
+  port: 9090
+  # PEM CA of the gRPC module (ca.crt from the grpc-certs volume)
+  trust-certificate: ca.crt
+  # The non-admin user created by docker/mcp-user.sh
+  username: mcp
+  password: example

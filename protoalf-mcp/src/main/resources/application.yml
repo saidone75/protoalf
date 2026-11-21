@@ -1,0 +1,44 @@
+server:
+  port: 8090
+
+spring:
+  application:
+    name: protoalf-mcp
+  ai:
+    mcp:
+      server:
+        name: alfresco
+        version: 1.0.0
+        type: SYNC
+        # Streamable HTTP transport, endpoint: http://<host>:8090/mcp
+        protocol: STREAMABLE
+        instructions: >
+          Tools to browse and modify the Alfresco content repository. Nodes are identified by nodeRefs
+          (workspace://SpacesStore/<id>), bare node ids or the aliases -root- (Company Home),
+          -my- (the user home folder) and -shared- (Shared Files): start from an alias.
+          Use alfresco_search to find documents and folders by name, content or metadata (AFTS query),
+          alfresco_list_children to navigate folders and alfresco_get_node to read the metadata of a
+          document or folder, alfresco_read_content to read the text of a document (PDF, Office, ...)
+          in slices. Use alfresco_list_models to discover types, aspects and their properties
+          before searching by type or setting metadata. The create, update, move, copy and delete tools change the repository with
+          the permissions of the configured Alfresco user: confirm with the user before deleting or
+          overwriting content. PERMISSION_DENIED means that user cannot write there.
+          alfresco_export_bulk exports a folder (documents, metadata, versions) for the Alfresco Bulk
+          Filesystem Import Tool in the background: follow it with alfresco_export_status.
+
+# Every value can be overridden with environment variables, e.g. ALFRESCO_GRPC_HOST, ALFRESCO_PASSWORD
+alfresco:
+  username: admin
+  password: admin
+  grpc:
+    host: localhost
+    port: 9090
+    # PEM CA certificate to verify the gRPC server; empty = plaintext (accepted by Alfresco only on loopback)
+    trust-certificate: ""
+    authority-override: ""
+    deadline: 30s
+  export:
+    # Directory on the MCP server the exports are written into, one subdirectory per export
+    directory: export
+    # Deadline of each call of an export: a whole download must complete within it
+    deadline: 30m

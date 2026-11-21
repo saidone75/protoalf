@@ -1,0 +1,96 @@
+syntax = "proto3";
+package protoalf.v1;
+option java_package = "org.saidone.protoalf.api";
+option java_multiple_files = true;
+
+service AuthenticationService {
+ // AuthenticationService
+ rpc Login(LoginRequest) returns (LoginResponse);
+}
+
+service NodeService {
+ // NodeService
+ rpc GetNode(GetNodeRequest) returns (Node);
+ rpc UpdateNode(UpdateNodeRequest) returns (Node);
+ rpc DeleteNode(DeleteNodeRequest) returns (DeleteNodeResponse);
+
+ // FileFolderService
+ rpc ListChildren(ListChildrenRequest) returns (ListChildrenResponse);
+ rpc CreateNode(CreateNodeRequest) returns (Node);
+ rpc MoveNode(MoveNodeRequest) returns (Node);
+ rpc CopyNode(CopyNodeRequest) returns (Node);
+
+ // SearchService
+ rpc Search(SearchRequest) returns (SearchResponse);
+
+ // ContentService
+ rpc GetContent(GetContentRequest) returns (GetContentResponse);
+ rpc DownloadContent(DownloadContentRequest) returns (stream DownloadContentResponse);
+ rpc UpdateContent(UpdateContentRequest) returns (Node);
+ rpc UploadContent(stream UploadContentRequest) returns (Node);
+
+ // VersionService
+ rpc ListVersions(ListVersionsRequest) returns (ListVersionsResponse);
+
+ // DictionaryService
+ rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+}
+
+// Common: node, properties and their values
+message Node { string node_ref = 1; string name = 2; string type = 3; repeated string aspects = 4; map<string, Property> properties = 5; string parent_ref = 6; }
+message Property { repeated PropertyValue values = 1; bool multi_valued = 2; }
+message PropertyValue {
+ oneof value {
+  string string_value = 1; int64 integer_value = 2; double double_value = 3;
+  bool boolean_value = 4; int64 timestamp_millis = 5; string node_ref_value = 6;
+  ContentMetadata content_value = 7; string qname_value = 8; bool null_value = 9;
+ }
+}
+message ContentMetadata { string mimetype = 1; string encoding = 2; int64 size = 3; string locale = 4; }
+message PropertyValues { repeated string values = 1; }
+message Content { bytes data = 1; string mimetype = 2; string encoding = 3; }
+
+// AuthenticationService
+message LoginRequest { string user = 1; string password = 2; }
+message LoginResponse { string ticket = 1; }
+
+// NodeService
+message GetNodeRequest { string node_ref = 1; }
+message UpdateNodeRequest { string node_ref = 1; string name = 2; map<string, string> properties = 3; string type = 4; map<string, PropertyValues> property_values = 5; repeated string add_aspects = 6; repeated string remove_aspects = 7; }
+message DeleteNodeRequest { string node_ref = 1; }
+message DeleteNodeResponse { }
+
+// FileFolderService
+message ListChildrenRequest { string node_ref = 1; int32 skip_count = 2; int32 max_items = 3; }
+message ListChildrenResponse { repeated Node entries = 1; bool has_more_items = 2; int64 total_items = 3; }
+message CreateNodeRequest { string parent_ref = 1; string name = 2; string type = 3; map<string, string> properties = 4; Content content = 5; map<string, PropertyValues> property_values = 6; repeated string aspects = 7; }
+message MoveNodeRequest { string node_ref = 1; string target_parent_ref = 2; string name = 3; }
+message CopyNodeRequest { string node_ref = 1; string target_parent_ref = 2; string name = 3; }
+
+// SearchService
+message SearchRequest { string query = 1; string language = 2; int32 skip_count = 3; int32 max_items = 4; repeated SortField sort = 5; }
+message SortField { string field = 1; bool descending = 2; }
+message SearchResponse { repeated Node entries = 1; bool has_more_items = 2; int64 total_items = 3; }
+
+// ContentService
+message GetContentRequest { string node_ref = 1; bool text = 2; int64 offset = 3; int32 max_bytes = 4; }
+message GetContentResponse { Content content = 1; int64 size = 2; bool has_more = 3; }
+message DownloadContentRequest { string node_ref = 1; }
+message DownloadContentResponse { oneof part { ContentInfo info = 1; bytes data = 2; } }
+message ContentInfo { string mimetype = 1; string encoding = 2; int64 size = 3; }
+message UpdateContentRequest { string node_ref = 1; Content content = 2; }
+message UploadContentRequest { oneof part { CreateDocumentHeader header = 1; bytes data = 2; } }
+message CreateDocumentHeader { string parent_ref = 1; string name = 2; string type = 3; map<string, string> properties = 4; string mimetype = 5; string encoding = 6; map<string, PropertyValues> property_values = 7; repeated string aspects = 8; }
+
+// VersionService
+message ListVersionsRequest { string node_ref = 1; }
+message ListVersionsResponse { repeated VersionInfo versions = 1; }
+message VersionInfo { string label = 1; string version_ref = 2; bool major = 3; string description = 4; int64 modified_millis = 5; string modifier = 6; Node node = 7; }
+
+// DictionaryService
+message ListModelsRequest { string model = 1; bool include_properties = 2; }
+message ListModelsResponse { repeated ModelInfo models = 1; }
+message ModelInfo { string name = 1; string description = 2; repeated NamespaceInfo namespaces = 3; repeated ClassInfo types = 4; repeated ClassInfo aspects = 5; }
+message NamespaceInfo { string prefix = 1; string uri = 2; }
+message ClassInfo { string name = 1; string title = 2; string parent = 3; repeated string mandatory_aspects = 4; repeated PropertyInfo properties = 5; }
+message PropertyInfo { string name = 1; string title = 2; string data_type = 3; bool mandatory = 4; bool multi_valued = 5; bool read_only = 6; }

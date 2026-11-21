@@ -1,0 +1,175 @@
+# Full development stack: Alfresco (with the gRPC module) + its dependencies + the Spring AI MCP server.
+# Build the modules first (`mvn package` from the repository root), or simply use `run.sh build_start` / `run.bat build_start`.
+name: protoalf
+
+services:
+  # One-shot: generates the TLS material for the gRPC listener into the 'grpc-certs' volume
+  certs:
+    image: alpine:3.22
+    entrypoint: ["sh", "/scripts/grpc-certs.sh"]
+    volumes:
+      - ./grpc-certs.sh:/scripts/grpc-certs.sh:ro
+      - grpc-certs:/certs
+
+  # One-shot: makes the bind-mounted export directory writable by the non-root user of the MCP server
+  export-dir:
+    image: alpine:3.22
+    entrypoint: ["chmod", "777", "/export"]
+    volumes:
+      - ./export:/export
+
+  acs:
+    image: protoalf-acs:development
+    build:
+      # Filtered Dockerfile + module JAR, produced by `mvn package` in protoalf-platform
+      context: ../protoalf-platform/target
+      dockerfile: ./Dockerfile
+    environment:
+      JAVA_TOOL_OPTIONS: "-Dencryption.keystore.type=JCEKS -Dencryption.cipherAlgorithm=AES/CBC/PKCS5Padding -Dencryption.keyAlgorithm=AES -Dencryption.keystore.location=/usr/local/tomcat/shared/classes/alfresco/extension/keystore/keystore -Dmetadata-keystore.password=mp6yc0UD9e -Dmetadata-keystore.aliases=metadata -Dmetadata-keystore.metadata.password=oKIWzVdEdA -Dmetadata-keystore.metadata.algorithm=AES"
+      JAVA_OPTS: "
+        -Dsolr.secureComms=none
+        -Dmessaging.broker.url=\"failover:(nio://activemq:61616)?timeout=3000&jms.useCompression=true\"
+        -Dshare.host=localhost
+        -Dshare.port=8180
+        -Dprotoalf.host=0.0.0.0
+        -Dprotoalf.port=9090
+        -Dprotoalf.tls.certificate=/grpc-certs/server.crt
+        -Dprotoalf.tls.private-key=/grpc-certs/server.key
+        "
+      CATALINA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=0.0.0.0:8888"
+    ports:
+      - "8080:8080"   # Alfresco
+      - "8888:8888"   # Java debug
+      - "9090:9090"   # gRPC (TLS, CA in the grpc-certs volume)
+    volumes:
+      - acs-data:/usr/local/tomcat/alf_data
+      - grpc-certs:/grpc-certs:ro
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_started
+      transform-core-aio:
+        condition: service_started
+
+  # Local transforms (PDF, Office, images, ...): text extraction for GetContent and content indexing.
+  # Reached by Alfresco on the internal network only (port 8090 on the host belongs to the MCP server).
+  transform-core-aio:
+    image: alfresco/alfresco-transform-core-aio:5.4.3
+    mem_limit: 2g
+    environment:
+      JAVA_OPTS: "-XX:MinRAMPercentage=50 -XX:MaxRAMPercentage=80"
+
+  # Alfresco Share UI: http://localhost:8180/share (the community repository image already includes share-services)
+  share:
+    image: alfresco/alfresco-share:7.0.0
+    environment:
+      REPO_HOST: acs
+      REPO_PORT: 8080
+      # Share is reached directly on 8180: the CSRF filter must accept that origin
+      CSRF_FILTER_REFERER: http://localhost:8180/.*
+      CSRF_FILTER_ORIGIN: http://localhost:8180
+      JAVA_OPTS: "
+        -Xms500m
+        -Xmx1g
+        -Dalfresco.host=localhost
+        -Dalfresco.port=8080
+        -Dalfresco.context=alfresco
+        -Dalfresco.protocol=http
+        "
+    ports:
+      - "8180:8080"
+    depends_on:
+      acs:
+        condition: service_started
+
+  postgres:
+    image: postgres:16.5
+    environment:
+      POSTGRES_DB: alfresco
+      POSTGRES_USER: alfresco
+      POSTGRES_PASSWORD: alfresco
+    command: postgres -c max_connections=300 -c log_min_messages=LOG
+    ports:
+      - "5555:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  solr:
+    image: alfresco/alfresco-search-services:2.0.1
+    environment:
+      SOLR_ALFRESCO_HOST: acs
+      SOLR_ALFRESCO_PORT: 8080
+      SOLR_SOLR_HOST: solr
+      SOLR_SOLR_PORT: 8983
+      SOLR_CREATE_ALFRESCO_DEFAULTS: alfresco,archive
+      # Search Services 2.0.1, the version of Alfresco 7.0: later versions dropped "none" and fall back to mTLS.
+      # Alfresco 7.0 has no shared secret mode: Solr is unauthenticated, so it is published on localhost only
+      ALFRESCO_SECURE_COMMS: "none"
+    ports:
+      - "127.0.0.1:8983:8983"
+    volumes:
+      - ass-data:/opt/alfresco-search-services/contentstore
+      - ass-data:/opt/alfresco-search-services/data
+
+  activemq:
+    image: alfresco/alfresco-activemq:5.18-jre17-rockylinux8
+    mem_limit: 1g
+    ports:
+      - "8161:8161"   # Web Console
+      - "5672:5672"   # AMQP
+      - "61616:61616" # OpenWire
+      - "61613:61613" # STOMP
+
+  # One-shot: creates the non-admin user the MCP server works as, and the folder it can write to (see mcp-user.sh)
+  mcp-user:
+    image: curlimages/curl:8.11.1
+    entrypoint: ["sh", "/scripts/mcp-user.sh"]
+    environment:
+      ALFRESCO_URL: http://acs:8080
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin
+      MCP_USERNAME: mcp
+      MCP_PASSWORD: ${MCP_ALFRESCO_PASSWORD:-example}
+      MCP_FOLDER: MCP
+    volumes:
+      - ./mcp-user.sh:/scripts/mcp-user.sh:ro
+    depends_on:
+      acs:
+        condition: service_started
+
+  # Spring AI MCP server: gRPC client of Alfresco, MCP endpoint at http://localhost:8090/mcp
+  mcp:
+    image: protoalf-mcp:development
+    build:
+      context: ../protoalf-mcp
+      dockerfile: ./Dockerfile
+    environment:
+      # Dedicated non-admin user: every tool call (reads and writes) runs with its permissions
+      ALFRESCO_USERNAME: mcp
+      ALFRESCO_PASSWORD: ${MCP_ALFRESCO_PASSWORD:-example}
+      ALFRESCO_GRPC_HOST: acs
+      ALFRESCO_GRPC_PORT: 9090
+      ALFRESCO_GRPC_TRUST_CERTIFICATE: /grpc-certs/ca.crt
+      # Bulk import exports (alfresco_export_bulk), on the host in docker/export
+      ALFRESCO_EXPORT_DIRECTORY: /export
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./export:/export
+      - grpc-certs:/grpc-certs:ro
+    depends_on:
+      export-dir:
+        condition: service_completed_successfully
+      certs:
+        condition: service_completed_successfully
+      acs:
+        condition: service_started
+      mcp-user:
+        condition: service_completed_successfully
+
+volumes:
+  acs-data:
+  db-data:
+  ass-data:
+  grpc-certs:
