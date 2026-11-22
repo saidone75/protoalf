@@ -12,27 +12,67 @@ import org.saidone.protoalf.api.*;
 
 import java.util.*;
 
+/**
+ * Converts Alfresco nodes and repository property values into transport-safe Protobuf snapshots.
+ *
+ * <p>Repository-backed mapping requires an existing transaction and caller authentication. The primary-parent
+ * lookup uses system identity only to avoid a denied lookup marking that transaction for rollback; the parent
+ * reference is returned only after an explicit permission check as the original caller.
+ *
+ * <p>Property conversion preserves supported scalar types and collection cardinality. Content properties expose
+ * metadata only, never the underlying content-store URL.
+ */
 final class NodeMapper {
 
+    /**
+     * Repository node service used to read node metadata and associations.
+     */
     private final NodeService nodes;
+
+    /**
+     * Repository services used under the caller's transaction and authentication context.
+     */
     private final ServiceRegistry services;
 
+    /**
+     * Creates the mapper using the registry's secured repository services.
+     *
+     * @param services Alfresco service registry; repository work uses its secured services
+     */
     NodeMapper(ServiceRegistry services) {
         this.services = services;
         this.nodes = services.getNodeService();
     }
 
+    /**
+     * Builds a node snapshot with type, name, sorted aspects and typed properties. Parent inclusion is
+     * permission checked and can be disabled for frozen version nodes.
+     *
+     * @param ref existing node to read inside the caller transaction
+     * @return a transport snapshot without content-store locations
+     */
     Node map(NodeRef ref) {
         return map(ref, true);
     }
 
     /**
-     * A frozen version node: it has no primary parent in the store of the live nodes.
+     * Maps a frozen version node without attempting to resolve a primary parent in the live hierarchy.
+     *
+     * @param frozen frozen-state reference of a repository version
+     * @return the frozen metadata snapshot without a parent reference
      */
     Node mapVersion(NodeRef frozen) {
         return map(frozen, false);
     }
 
+    /**
+     * Builds a node snapshot with type, name, sorted aspects and typed properties. Parent inclusion is
+     * permission checked and can be disabled for frozen version nodes.
+     *
+     * @param ref existing node to read inside the caller transaction
+     * @param withParent whether to resolve and include a readable primary parent
+     * @return a transport snapshot without content-store locations
+     */
     private Node map(NodeRef ref, boolean withParent) {
         val result = Node.newBuilder().setNodeRef(ref.toString()).setType(nodes.getType(ref).toString());
         val parent = withParent ? parent(ref) : null;
@@ -48,8 +88,12 @@ final class NodeMapper {
     }
 
     /**
-     * Primary parent, only when the caller can read it. Looked up as system: the secured getPrimaryParent throws
-     * AccessDeniedException for an unreadable parent, which would mark the surrounding transaction for rollback.
+     * Looks up the primary association as system, then checks READ_PROPERTIES on its parent as the restored
+     * caller. This avoids a denied lookup poisoning the caller transaction without disclosing an unreadable
+     * parent.
+     *
+     * @param ref node whose primary parent is required
+     * @return the readable primary parent, or null if absent or unreadable
      */
     private NodeRef parent(NodeRef ref) {
         val association = AuthenticationUtil.runAsSystem(() -> nodes.getPrimaryParent(ref));
@@ -60,6 +104,13 @@ final class NodeMapper {
         return readable == AccessStatus.ALLOWED ? parent : null;
     }
 
+    /**
+     * Converts a scalar or collection property, preserving collection cardinality and element order. Null
+     * scalar values use the explicit Protobuf null marker.
+     *
+     * @param value repository property value, collection or null
+     * @return a typed property with its multi-valued flag
+     */
     static Property property(Object value) {
         val property = Property.newBuilder();
         if (value instanceof Collection<?>) {
@@ -71,6 +122,14 @@ final class NodeMapper {
         return property.build();
     }
 
+    /**
+     * Converts one property element to its Protobuf scalar representation. Integral/floating types, dates,
+     * booleans, references and qualified names retain their kinds; unknown objects use their string form.
+     * ContentData exposes MIME type, encoding, size and locale only.
+     *
+     * @param value scalar repository value, or null
+     * @return a typed transport value that never contains a content-store URL
+     */
     static PropertyValue value(Object value) {
         val b = PropertyValue.newBuilder();
         if (value == null)

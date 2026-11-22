@@ -1,6 +1,7 @@
 package org.saidone.protoalf.platform;
 
 import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.val;
@@ -33,27 +34,66 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Repository write operations behind the gRPC write RPCs.
- * Runs inside the caller's read-write transaction, as the caller: Alfresco enforces permissions, locks,
- * unique names and model constraints. Input errors are reported as {@link IllegalArgumentException}.
+ * Validates remote write inputs and applies them through Alfresco repository services.
+ *
+ * <p>Callers provide the authenticated user's retryable read-write transaction. This helper does not commit or
+ * start transactions. Alfresco remains responsible for permissions, locks, duplicate names and content model
+ * constraints.
+ *
+ * <p>Writes support document and folder types, known non-system aspects and writable dictionary properties.
+ * Names and content use dedicated request fields. Text property values are converted to the dictionary's Java
+ * types; protected, reserved and system properties are rejected before mutation where possible.
+ *
+ * <p>Uploads backed by a file reopen the input stream for each transaction attempt. This is essential when
+ * Alfresco retries creation after the bytes have already been received.
  */
 @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 final class NodeWriter {
 
     /**
-     * Set through dedicated request fields, never through the properties map.
+     * Properties supplied through dedicated name/content fields instead of metadata maps.
      */
     private static final Set<QName> RESERVED = Set.of(ContentModel.PROP_NAME, ContentModel.PROP_CONTENT);
+
+    /**
+     * Maximum node-name length accepted by the remote write helpers.
+     */
     static final int MAX_NAME_LENGTH = 255;
+
+    /**
+     * Repository services used under the caller's transaction and authentication context.
+     */
     private final ServiceRegistry services;
 
+    /**
+     * Creates a document or folder and applies validated metadata in the current write transaction. Blank type
+     * defaults to cm:content; folders cannot receive content. Aspects are added before properties.
+     *
+     * @param parent destination parent folder
+     * @param name required non-blank node name, at most MAX_NAME_LENGTH characters
+     * @param type qualified document/folder type; blank defaults to cm:content
+     * @param properties scalar text property values keyed by qualified name
+     * @param content document bytes and metadata; null is allowed only for creation without content
+     * @return the created node reference
+     * @throws IllegalArgumentException if input validation fails or the requested operation is unsupported
+     */
     NodeRef create(NodeRef parent, String name, String type, Map<String, String> properties, Content content) {
         return create(parent, name, type, properties, Map.of(), List.of(), content);
     }
 
     /**
-     * @param propertyValues multi-valued (or single-valued) properties, see {@link #propertyValues}
-     * @param aspects        added before the properties are set, so that aspect properties can be written
+     * Creates a document or folder and applies validated metadata in the current write transaction. Blank type
+     * defaults to cm:content; folders cannot receive content. Aspects are added before properties.
+     *
+     * @param parent destination parent folder
+     * @param name required non-blank node name, at most MAX_NAME_LENGTH characters
+     * @param type qualified document/folder type; blank defaults to cm:content
+     * @param properties scalar text property values keyed by qualified name
+     * @param propertyValues list-valued text properties; a property must not occur in both maps
+     * @param aspects known non-system aspects to add before setting metadata
+     * @param content document bytes and metadata; null is allowed only for creation without content
+     * @return the created node reference
+     * @throws IllegalArgumentException if input validation fails or the requested operation is unsupported
      */
     NodeRef create(NodeRef parent, String name, String type, Map<String, String> properties, Map<String, List<String>> propertyValues, List<String> aspects, Content content) {
         val typeName = type.isBlank() ? ContentModel.TYPE_CONTENT : fileType(type);
@@ -72,14 +112,36 @@ final class NodeWriter {
         return ref;
     }
 
+    /**
+     * Applies a composite metadata change in the current transaction. Renames and type changes precede aspect
+     * changes and property merging. Blank name/type fields preserve existing values; at least one change is
+     * required and document/folder categories cannot be crossed.
+     *
+     * @param ref existing node to mutate in the caller transaction
+     * @param name new node name, or the empty string to preserve the existing name
+     * @param type new qualified type, or the empty string to preserve the existing type
+     * @param properties scalar text property values keyed by qualified name
+     * @return the updated node reference
+     * @throws IllegalArgumentException if input validation fails or the requested operation is unsupported
+     */
     NodeRef update(NodeRef ref, String name, String type, Map<String, String> properties) {
         return update(ref, name, type, properties, Map.of(), List.of(), List.of());
     }
 
     /**
-     * Renames the node, changes its type, adds and removes aspects, then sets the properties (which may belong to
-     * the new type and to the added aspects). A document can only become another document type and a folder another
-     * folder type. Aspects the node already has (or does not have, for removal) are ignored.
+     * Applies a composite metadata change in the current transaction. Renames and type changes precede aspect
+     * changes and property merging. Blank name/type fields preserve existing values; at least one change is
+     * required and document/folder categories cannot be crossed.
+     *
+     * @param ref existing node to mutate in the caller transaction
+     * @param name new node name, or the empty string to preserve the existing name
+     * @param type new qualified type, or the empty string to preserve the existing type
+     * @param properties scalar text property values keyed by qualified name
+     * @param propertyValues list-valued text properties; a property must not occur in both maps
+     * @param addAspects known non-system aspects to add if absent
+     * @param removeAspects known non-system aspects to remove if present
+     * @return the updated node reference
+     * @throws IllegalArgumentException if input validation fails or the requested operation is unsupported
      */
     NodeRef update(NodeRef ref, String name, String type, Map<String, String> properties, Map<String, List<String>> propertyValues, List<String> addAspects, List<String> removeAspects) {
         if (name.isEmpty() && type.isEmpty() && properties.isEmpty() && propertyValues.isEmpty() && addAspects.isEmpty() && removeAspects.isEmpty())
@@ -103,16 +165,41 @@ final class NodeWriter {
         return ref;
     }
 
+    /**
+     * Moves a node through Alfresco file/folder services; an empty name preserves its current name.
+     *
+     * @param ref existing node to mutate in the caller transaction
+     * @param targetParent destination parent folder reference
+     * @param name new node name, or the empty string to preserve the existing name
+     * @return the moved node reference
+     * @throws StatusRuntimeException with NOT_FOUND if the file/folder service reports a missing source or
+     *     destination
+     */
     NodeRef move(NodeRef ref, NodeRef targetParent, String name) {
         return fileOperation(() -> services.getFileFolderService().move(ref, targetParent, optionalName(name))).getNodeRef();
     }
 
+    /**
+     * Copies a node through Alfresco file/folder services, delegating folder recursion and association behavior
+     * to Alfresco.
+     *
+     * @param ref existing node to mutate in the caller transaction
+     * @param targetParent destination parent folder reference
+     * @param name new node name, or the empty string to preserve the existing name
+     * @return the new copy reference
+     * @throws StatusRuntimeException with NOT_FOUND if the file/folder service reports a missing source or
+     *     destination
+     */
     NodeRef copy(NodeRef ref, NodeRef targetParent, String name) {
         return fileOperation(() -> services.getFileFolderService().copy(ref, targetParent, optionalName(name))).getNodeRef();
     }
 
     /**
-     * Deletes to the trashcan (archive store). Well-known folders are refused even when permissions would allow it.
+     * Deletes a node through Alfresco after refusing Company Home, Shared Files and the calling user's home
+     * folder. The surrounding transaction determines commit or rollback.
+     *
+     * @param ref existing node to mutate in the caller transaction
+     * @throws IllegalArgumentException if input validation fails or the requested operation is unsupported
      */
     void delete(NodeRef ref) {
         if (protectedFolders().contains(ref))
@@ -120,14 +207,33 @@ final class NodeWriter {
         services.getNodeService().deleteNode(ref);
     }
 
+    /**
+     * Resolves the protected root, shared and current-user home aliases under the calling identity, omitting
+     * aliases with no node.
+     *
+     * @return the node references that delete must refuse
+     */
     private Set<NodeRef> protectedFolders() {
         val locator = services.getNodeLocatorService();
         return GrpcServiceSupport.ALIASES.values().stream().map(name -> locator.getNode(name, null, null)).filter(Objects::nonNull).collect(Collectors.toSet());
     }
 
     /**
-     * Creates a document (never a folder) whose content is read from a file, for the UploadContent RPC.
-     * A fresh stream is opened on every call: the transaction (and so this method) may be retried.
+     * Creates a document from a spool file, reopening its stream on every transaction attempt. Validates
+     * metadata and aspects before creation; a folder type is rejected.
+     *
+     * @param parent destination parent folder
+     * @param name required non-blank node name, at most MAX_NAME_LENGTH characters
+     * @param type qualified document subtype; blank defaults to cm:content
+     * @param properties scalar text property values keyed by qualified name
+     * @param propertyValues list-valued text properties; a property must not occur in both maps
+     * @param aspects known non-system aspects to add before setting metadata
+     * @param mimetype MIME type, or blank to infer it from the filename
+     * @param encoding character encoding, or blank for UTF-8
+     * @param file repeatably readable spool file containing the new document bytes
+     * @return the created document reference
+     * @throws IllegalArgumentException if input validation fails or the requested operation is unsupported
+     * @throws ContentIOException if the source content cannot be opened or read
      */
     NodeRef createDocument(NodeRef parent, String name, String type, Map<String, String> properties, Map<String, List<String>> propertyValues, List<String> aspects, String mimetype, String encoding, Path file) {
         val typeName = type.isBlank() ? ContentModel.TYPE_CONTENT : fileType(type);
@@ -143,6 +249,16 @@ final class NodeWriter {
         return ref;
     }
 
+    /**
+     * Replaces cm:content on a document using its existing name for MIME-type inference. Null content and
+     * non-document nodes are rejected.
+     *
+     * @param ref existing node to mutate in the caller transaction
+     * @param content required content bytes and metadata; an empty payload is allowed
+     * @return the updated document reference
+     * @throws IllegalArgumentException if input validation fails or the requested operation is unsupported
+     * @throws ContentIOException if the source content cannot be opened or read
+     */
     NodeRef updateContent(NodeRef ref, Content content) {
         if (content == null)
             throw new IllegalArgumentException("content is required");
@@ -153,12 +269,29 @@ final class NodeWriter {
         return ref;
     }
 
+    /**
+     * Writes document content using a fresh input stream and closes that stream. A blank MIME type is inferred
+     * from the node name and blank encoding defaults to UTF-8.
+     *
+     * @param ref existing node to mutate in the caller transaction
+     * @param name filename used to infer the MIME type when none is supplied
+     * @param content required document bytes with optional MIME type and encoding
+     * @throws ContentIOException if the source content cannot be opened or read
+     */
     private void write(NodeRef ref, String name, Content content) {
         write(ref, name, content.getMimetype(), content.getEncoding(), () -> content.getData().newInput());
     }
 
     /**
-     * Writes the content of the node: mimetype guessed from the name and encoding UTF-8 when blank.
+     * Writes document content using a fresh input stream and closes that stream. A blank MIME type is inferred
+     * from the node name and blank encoding defaults to UTF-8.
+     *
+     * @param ref existing node to mutate in the caller transaction
+     * @param name filename used to infer the MIME type when none is supplied
+     * @param mimetype MIME type, or blank to infer it from the filename
+     * @param encoding character encoding, or blank for UTF-8
+     * @param data repeatable supplier of a fresh content stream
+     * @throws ContentIOException if the source content cannot be opened or read
      */
     private void write(NodeRef ref, String name, String mimetype, String encoding, InputSource data) {
         val writer = services.getContentService().getWriter(ref, ContentModel.PROP_CONTENT, true);
@@ -171,14 +304,29 @@ final class NodeWriter {
         }
     }
 
+    /**
+     * Opens a fresh content stream for each write attempt.
+     *
+     * <p>Implementations must be repeatable because the surrounding repository transaction may retry. The
+     * writer closes every stream returned by {@link #open}.
+     */
     @FunctionalInterface
     private interface InputSource {
 
+        /**
+         * Opens a fresh stream positioned at the start of the supplied content.
+         *
+         * @return a stream that the receiving writer must close
+         * @throws IOException if the content source cannot be opened
+         */
         InputStream open() throws IOException;
     }
 
     /**
-     * Adds the aspects the node does not have yet.
+     * Adds each known aspect that the node does not already have, initially with an empty property map.
+     *
+     * @param ref existing node to mutate in the caller transaction
+     * @param aspects known non-system aspects to add before setting metadata
      */
     private void addAspects(NodeRef ref, List<QName> aspects) {
         val nodes = services.getNodeService();
@@ -187,7 +335,12 @@ final class NodeWriter {
     }
 
     /**
-     * Resolves aspect names: each must be a known aspect outside the sys namespace.
+     * Resolves and validates aspect names against the dictionary. System namespace aspects and unknown aspect
+     * definitions are rejected.
+     *
+     * @param names aspect names in prefix or expanded notation
+     * @return validated aspect qualified names in input order
+     * @throws IllegalArgumentException if a name is invalid, unknown or in the system namespace
      */
     private List<QName> aspects(List<String> names) {
         val dictionary = services.getDictionaryService();
@@ -204,7 +357,12 @@ final class NodeWriter {
     }
 
     /**
-     * Converts "prefix:name" -> text values into typed repository values, validating each property.
+     * Converts scalar text values to dictionary types and wraps values in collections for multi-valued
+     * properties.
+     *
+     * @param input qualified property names mapped to scalar text values
+     * @return converted properties ready for repository mutation
+     * @throws IllegalArgumentException if a property is not writable or a value cannot be converted
      */
     Map<QName, Serializable> properties(Map<String, String> input) {
         val result = new HashMap<QName, Serializable>();
@@ -218,8 +376,14 @@ final class NodeWriter {
     }
 
     /**
-     * Converts "prefix:name" -> list of text values (property_values). A multi-valued property takes any number of
-     * values (empty = unset); a single-valued one takes 0 (unset) or 1 value.
+     * Converts explicit value lists according to dictionary cardinality. Multi-valued properties accept any
+     * list; single-valued properties accept zero or one value. Empty single-valued lists become null, while
+     * empty multi-valued lists remain empty collections.
+     *
+     * @param input qualified property names mapped to ordered text value lists
+     * @return typed scalar or collection values ready for repository mutation
+     * @throws IllegalArgumentException if a property is not writable, a value is invalid or a scalar receives
+     *     multiple values
      */
     Map<QName, Serializable> propertyValues(Map<String, List<String>> input) {
         val result = new HashMap<QName, Serializable>();
@@ -240,7 +404,13 @@ final class NodeWriter {
     }
 
     /**
-     * Both maps together: a property given in both is rejected.
+     * Converts and merges scalar and explicit-list property inputs, rejecting duplicate qualified names even
+     * when expressed with different name notation.
+     *
+     * @param properties scalar text properties
+     * @param propertyValues explicit text value lists
+     * @return one validated typed property map
+     * @throws IllegalArgumentException if conversion fails or a qualified property occurs in both maps
      */
     private Map<QName, Serializable> values(Map<String, String> properties, Map<String, List<String>> propertyValues) {
         val result = properties(properties);
@@ -251,7 +421,13 @@ final class NodeWriter {
     }
 
     /**
-     * The definition of a property that a request may set: not reserved, known, and neither protected nor sys.
+     * Finds a dictionary property and rejects dedicated name/content fields, system properties and protected
+     * definitions.
+     *
+     * @param key original input name for diagnostic messages
+     * @param name resolved qualified property name
+     * @return the writable dictionary definition
+     * @throws IllegalArgumentException if the property is reserved, unknown, protected or a system property
      */
     private PropertyDefinition writable(String key, QName name) {
         if (RESERVED.contains(name))
@@ -264,6 +440,16 @@ final class NodeWriter {
         return definition;
     }
 
+    /**
+     * Converts one text value with Alfresco's default type converter and reports invalid input without exposing
+     * converter internals.
+     *
+     * @param key input property name for diagnostics
+     * @param definition dictionary definition providing the destination datatype
+     * @param value text value to convert
+     * @return the serializable typed repository value
+     * @throws IllegalArgumentException if the value does not match the dictionary datatype
+     */
     private static Serializable convert(String key, PropertyDefinition definition, String value) {
         try {
             return (Serializable) DefaultTypeConverter.INSTANCE.convert(definition.getDataType(), value);
@@ -273,7 +459,12 @@ final class NodeWriter {
     }
 
     /**
-     * Resolves a type that must exist and be cm:content, cm:folder or one of their subtypes.
+     * Resolves a known document or folder type, including subtypes, and rejects unrelated repository types.
+     *
+     * @param type qualified type name in prefix or expanded notation
+     * @return the validated type qualified name
+     * @throws IllegalArgumentException if the name is invalid, unknown or outside the document/folder
+     *     hierarchies
      */
     private QName fileType(String type) {
         val dictionary = services.getDictionaryService();
@@ -285,10 +476,23 @@ final class NodeWriter {
         return typeName;
     }
 
+    /**
+     * Tests whether the dictionary type belongs to the cm:folder hierarchy.
+     *
+     * @param type qualified dictionary type name
+     * @return true for cm:folder or one of its subtypes
+     */
     private boolean isFolder(QName type) {
         return services.getDictionaryService().isSubClass(type, ContentModel.TYPE_FOLDER);
     }
 
+    /**
+     * Resolves a prefix-qualified or expanded name using the repository namespace service.
+     *
+     * @param value input property, aspect or type name
+     * @return the resolved qualified name
+     * @throws IllegalArgumentException if the name or namespace prefix is invalid
+     */
     private QName qname(String value) {
         try {
             return QName.resolveToQName(services.getNamespaceService(), value);
@@ -297,18 +501,39 @@ final class NodeWriter {
         }
     }
 
+    /**
+     * Validates the non-blank node name length before passing it to Alfresco for repository-specific
+     * validation.
+     *
+     * @param name candidate node name
+     * @return the unchanged validated name
+     * @throws IllegalArgumentException if the name is blank or longer than MAX_NAME_LENGTH
+     */
     private static String name(String name) {
         if (name.isBlank() || name.length() > MAX_NAME_LENGTH)
             throw new IllegalArgumentException(String.format("name must be 1..%d characters", MAX_NAME_LENGTH));
         return name;
     }
 
+    /**
+     * Converts the empty optional-name marker to null for Alfresco move/copy calls, otherwise validates the
+     * supplied name.
+     *
+     * @param name new name, or the empty string to keep the current name
+     * @return null for an omitted name, otherwise the validated name
+     * @throws IllegalArgumentException if a supplied name is blank or too long
+     */
     private static String optionalName(String name) {
         return name.isEmpty() ? null : name(name);
     }
 
     /**
-     * FileFolderService declares the checked FileNotFoundException: report it as NOT_FOUND.
+     * Executes a file/folder operation and translates its checked missing-file exception without intercepting
+     * other repository failures.
+     *
+     * @param operation repository operation to invoke
+     * @return the file information returned by Alfresco
+     * @throws StatusRuntimeException with NOT_FOUND if the operation reports a missing file or folder
      */
     private static FileInfo fileOperation(FileOperation operation) {
         try {
@@ -318,9 +543,21 @@ final class NodeWriter {
         }
     }
 
+    /**
+     * Represents an Alfresco file/folder call that declares a checked missing-file exception.
+     *
+     * <p>{@link NodeWriter#fileOperation} translates that exception to the gRPC {@code NOT_FOUND} status while
+     * allowing other repository failures to reach the common transaction error mapper.
+     */
     @FunctionalInterface
     private interface FileOperation {
 
+        /**
+         * Executes the wrapped Alfresco file/folder operation.
+         *
+         * @return the operation's resulting file information
+         * @throws FileNotFoundException if a source or parent folder required by the operation is missing
+         */
         FileInfo run() throws FileNotFoundException;
     }
 }

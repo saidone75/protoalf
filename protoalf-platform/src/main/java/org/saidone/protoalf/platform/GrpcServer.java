@@ -14,23 +14,82 @@ import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.concurrent.*;
 
+/**
+ * Owns the lifecycle of the embedded Alfresco gRPC listener.
+ *
+ * <p>The module's Spring context invokes {@link #start} after repository services are available and {@link
+ * #stop} during shutdown. One bounded worker pool serves all registered repository adapters. Each adapter uses
+ * the same {@link TicketInterceptor}; only credential authentication bypasses the ticket check.
+ *
+ * <p>A certificate and private key enable server-side TLS. Plaintext listeners are restricted to loopback
+ * addresses. Lifecycle methods are synchronized and repeated start/stop calls are safe.
+ */
 @Slf4j
 public final class GrpcServer {
 
+    /**
+     * Repository services used under the caller's transaction and authentication context.
+     */
     private final ServiceRegistry services;
+
+    /**
+     * Optional synchronous transform client passed to the content service.
+     */
     private final SynchronousTransformClient transforms;
+
+    /**
+     * Whether start is allowed to create a listener.
+     */
     private final boolean enabled;
+
+    /**
+     * Bind hostname and TLS certificate/private-key paths; empty paths select plaintext.
+     */
     private final String host, certificate, privateKey;
+
+    /**
+     * Listener port, worker count and maximum inbound gRPC message size in bytes.
+     */
     private final int port, threads, maxMessageSize;
+
+    /**
+     * Active listener, or null when stopped or not yet started.
+     */
     private Server server;
+
+    /**
+     * Bounded worker pool owned by this listener and released during shutdown.
+     */
     private ThreadPoolExecutor executor;
 
+    /**
+     * Creates a listener configuration; no network socket or worker pool is allocated until start is called.
+     *
+     * @param services Alfresco service registry; repository work uses its secured services
+     * @param enabled whether the listener should start when requested
+     * @param host bind hostname or IP address; plaintext requires a resolved loopback address
+     * @param port TCP port in 1..65535
+     * @param threads positive worker count for the bounded execution pool
+     * @param maxMessageSize maximum inbound message size in bytes, at least 1024
+     * @param certificate PEM certificate path, or blank for plaintext
+     * @param privateKey PEM private-key path, or blank for plaintext
+     */
     public GrpcServer(ServiceRegistry services, boolean enabled, String host, int port, int threads, int maxMessageSize, String certificate, String privateKey) {
         this(services, null, enabled, host, port, threads, maxMessageSize, certificate, privateKey);
     }
 
     /**
-     * @param transforms synchronous transforms used by GetContent to extract text, null when not available
+     * Creates a listener configuration; no network socket or worker pool is allocated until start is called.
+     *
+     * @param services Alfresco service registry; repository work uses its secured services
+     * @param transforms synchronous text-transform client, or null to disable non-plain-text extraction
+     * @param enabled whether the listener should start when requested
+     * @param host bind hostname or IP address; plaintext requires a resolved loopback address
+     * @param port TCP port in 1..65535
+     * @param threads positive worker count for the bounded execution pool
+     * @param maxMessageSize maximum inbound message size in bytes, at least 1024
+     * @param certificate PEM certificate path, or blank for plaintext
+     * @param privateKey PEM private-key path, or blank for plaintext
      */
     public GrpcServer(ServiceRegistry services, SynchronousTransformClient transforms, boolean enabled, String host, int port, int threads, int maxMessageSize, String certificate, String privateKey) {
         this.services = services;
@@ -44,6 +103,17 @@ public final class GrpcServer {
         this.privateKey = privateKey;
     }
 
+    /**
+     * Starts the listener unless disabled or already running. Validates configuration, allocates a bounded
+     * worker pool and registers every repository adapter with ticket interception.
+     *
+     * <p>TLS requires both a certificate and key. Without TLS, the resolved bind address must be loopback.
+     * Startup failures after executor allocation shut down that executor before propagating the error.
+     *
+     * @throws IllegalArgumentException if listener limits or TLS settings are invalid, or plaintext binds
+     *     outside loopback
+     * @throws Exception if address resolution, TLS setup or listener startup fails
+     */
     public synchronized void start() throws Exception {
         if (!enabled || server != null)
             return;
@@ -73,6 +143,11 @@ public final class GrpcServer {
         }
     }
 
+    /**
+     * Stops the listener and its worker pool. Allows up to ten seconds for graceful server termination, then
+     * forces shutdown. Restores the interrupt flag if interrupted and clears lifecycle state so another start
+     * is possible.
+     */
     public synchronized void stop() {
         try {
             if (server != null && !server.shutdown().awaitTermination(10, TimeUnit.SECONDS))
