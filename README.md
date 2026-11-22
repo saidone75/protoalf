@@ -1,5 +1,8 @@
 # protoalf
 
+[![CI](https://github.com/saidone75/protoalf/actions/workflows/ci.yml/badge.svg)](https://github.com/saidone75/protoalf/actions/workflows/ci.yml)
+[![Javadoc](https://github.com/saidone75/protoalf/actions/workflows/publish-javadoc.yml/badge.svg)](https://saidone75.github.io/protoalf/javadoc/)
+
 Exposes the Alfresco repository over **gRPC** and, on top of it, as **MCP tools** for LLMs (Claude, Ollama, ...).
 
 ```
@@ -45,6 +48,14 @@ Requires Docker Compose and Maven with JDK 21 or later. The script works from an
 `build_start` compiles the platform, client and MCP modules, builds the ACS and MCP images, starts the stack and follows its logs. TLS certificates and the dedicated MCP user are prepared automatically; the transform service handles content conversions. Press Ctrl+C to stop following logs while the stack keeps running.
 
 Other tasks: `build` (Maven packages and Docker images), `start` (uses existing Maven artifacts), `stop`, `restart`, `update` (rebuild and start), `status`, `tail`, `tail_all`, `reload_acs`, `reload_mcp`. `purge` also deletes all stack volumes, including repository data, database, indexes and TLS certificates. Ordinary stops and updates preserve volumes.
+
+## GitHub automation
+
+- `ci.yml`: on pushes to `main`, pull requests or manual runs, builds all modules with Java 21 and `mvn clean package`, runs tests, and uploads JARs and test reports.
+- `dependabot.yml`: checks Maven dependencies and GitHub Actions every Monday at 07:00 (Europe/Rome) and opens update pull requests.
+- `publish-javadoc.yml`: on pushes to `main` or manual runs, generates aggregated Javadoc and publishes it to the `javadoc` branch under `javadoc/`, following the same layout as alfresco-node-vault. To serve it with GitHub Pages, select **Deploy from a branch → javadoc → / (root)** in repository Settings → Pages; the documentation is then under `/javadoc/`.
+
+Generate the same documentation locally with `mvn -DskipTests clean package javadoc:aggregate`; the result is in `target/reports/apidocs`. The generated `org.saidone.protoalf.api` package is excluded from aggregated Javadoc because both platform and client generate the same classes.
 
 ## Connect an MCP client
 

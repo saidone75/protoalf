@@ -50,6 +50,19 @@
         </extensions>
         <pluginManagement>
             <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-javadoc-plugin</artifactId>
+                    <version>3.12.0</version>
+                    <configuration>
+                        <encoding>UTF-8</encoding>
+                        <doctitle>protoalf</doctitle>
+                        <header>protoalf</header>
+                        <doclint>none</doclint>
+                        <!-- Both platform and client generate this package from the same contract. -->
+                        <excludePackageNames>org.saidone.protoalf.api</excludePackageNames>
+                    </configuration>
+                </plugin>
                 <!-- Since JDK 23 javac runs no annotation processor found on the classpath: Lombok must be declared -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
