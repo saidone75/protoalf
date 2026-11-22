@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test all modules
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
+
+      - name: Generate gRPC sources, compile, test and package all modules
+        run: mvn --batch-mode --no-transfer-progress -Dstyle.color=never clean package
+
+      - name: Upload JARs
+        uses: actions/upload-artifact@v7
+        with:
+          name: protoalf-jars
+          path: |
+            protoalf-platform/target/protoalf-platform-*.jar
+            protoalf-client/target/protoalf-client-*.jar
+            protoalf-mcp/target/protoalf-mcp.jar
+            examples/java-client/target/protoalf-example.jar
+            !**/target/*-tests.jar
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload test reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: '**/target/surefire-reports/'
+          if-no-files-found: ignore
+          retention-days: 7
