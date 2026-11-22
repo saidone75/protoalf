@@ -43,15 +43,7 @@ final class NodeMapper {
         if (name != null)
             result.setName(name.toString());
         nodes.getAspects(ref).stream().map(QName::toString).sorted().forEach(result::addAspects);
-        properties.forEach((key, value) -> {
-            val property = Property.newBuilder();
-            if (value instanceof Collection<?>) {
-                property.setMultiValued(true);
-                ((Collection<?>) value).forEach(v -> property.addValues(value(v)));
-            } else
-                property.addValues(value(value));
-            result.putProperties(key.toString(), property.build());
-        });
+        properties.forEach((key, value) -> result.putProperties(key.toString(), property(value)));
         return result.build();
     }
 
@@ -66,6 +58,17 @@ final class NodeMapper {
             return null;
         val readable = services.getPermissionService().hasPermission(parent, PermissionService.READ_PROPERTIES);
         return readable == AccessStatus.ALLOWED ? parent : null;
+    }
+
+    static Property property(Object value) {
+        val property = Property.newBuilder();
+        if (value instanceof Collection<?>) {
+            property.setMultiValued(true);
+            ((Collection<?>) value).forEach(item -> property.addValues(value(item)));
+        } else {
+            property.addValues(value(value));
+        }
+        return property.build();
     }
 
     static PropertyValue value(Object value) {

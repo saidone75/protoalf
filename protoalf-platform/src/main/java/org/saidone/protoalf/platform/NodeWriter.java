@@ -122,7 +122,7 @@ final class NodeWriter {
 
     private Set<NodeRef> protectedFolders() {
         val locator = services.getNodeLocatorService();
-        return GrpcNodeService.ALIASES.values().stream().map(name -> locator.getNode(name, null, null)).filter(Objects::nonNull).collect(Collectors.toSet());
+        return GrpcServiceSupport.ALIASES.values().stream().map(name -> locator.getNode(name, null, null)).filter(Objects::nonNull).collect(Collectors.toSet());
     }
 
     /**

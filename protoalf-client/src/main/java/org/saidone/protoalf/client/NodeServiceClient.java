@@ -2,6 +2,7 @@ package org.saidone.protoalf.client;
 
 import com.google.protobuf.ByteString;
 import io.grpc.*;
+import io.grpc.stub.AbstractBlockingStub;
 import io.grpc.stub.ClientCallStreamObserver;
 import io.grpc.stub.ClientResponseObserver;
 import io.grpc.stub.MetadataUtils;
@@ -71,7 +72,7 @@ public class NodeServiceClient {
     }
 
     public ListChildrenResponse listChildren(String nodeRef, int skipCount, int maxItems) {
-        return call(s -> s.listChildren(ListChildrenRequest.newBuilder().setNodeRef(nodeRef).setSkipCount(skipCount).setMaxItems(maxItems).build()));
+        return call(FileFolderServiceGrpc.newBlockingStub(channel), s -> s.list(ListChildrenRequest.newBuilder().setNodeRef(nodeRef).setSkipCount(skipCount).setMaxItems(maxItems).build()));
     }
 
     /**
@@ -92,7 +93,7 @@ public class NodeServiceClient {
         val request = CreateNodeRequest.newBuilder().setParentRef(parentRef).setName(name).setType(type).putAllProperties(properties).putAllPropertyValues(toPropertyValues(propertyValues)).addAllAspects(aspects);
         if (content != null)
             request.setContent(content);
-        return call(s -> s.createNode(request.build()));
+        return call(FileFolderServiceGrpc.newBlockingStub(channel), s -> s.create(request.build()));
     }
 
     public Node updateNode(String nodeRef, String name, Map<String, String> properties) {
@@ -117,11 +118,11 @@ public class NodeServiceClient {
     }
 
     public Node moveNode(String nodeRef, String targetParentRef, String name) {
-        return call(s -> s.moveNode(MoveNodeRequest.newBuilder().setNodeRef(nodeRef).setTargetParentRef(targetParentRef).setName(name).build()));
+        return call(FileFolderServiceGrpc.newBlockingStub(channel), s -> s.move(MoveNodeRequest.newBuilder().setNodeRef(nodeRef).setTargetParentRef(targetParentRef).setName(name).build()));
     }
 
     public Node copyNode(String nodeRef, String targetParentRef, String name) {
-        return call(s -> s.copyNode(CopyNodeRequest.newBuilder().setNodeRef(nodeRef).setTargetParentRef(targetParentRef).setName(name).build()));
+        return call(FileFolderServiceGrpc.newBlockingStub(channel), s -> s.copy(CopyNodeRequest.newBuilder().setNodeRef(nodeRef).setTargetParentRef(targetParentRef).setName(name).build()));
     }
 
     public void deleteNode(String nodeRef) {
@@ -137,15 +138,15 @@ public class NodeServiceClient {
      * to {@link #getContent} or {@link #downloadContent} to read that version.
      */
     public ListVersionsResponse listVersions(String nodeRef) {
-        return call(s -> s.listVersions(ListVersionsRequest.newBuilder().setNodeRef(nodeRef).build()));
+        return call(VersionServiceGrpc.newBlockingStub(channel), s -> s.getVersionHistory(ListVersionsRequest.newBuilder().setNodeRef(nodeRef).build()));
     }
 
     public GetContentResponse getContent(String nodeRef, boolean text, long offset, int maxBytes) {
-        return call(s -> s.getContent(GetContentRequest.newBuilder().setNodeRef(nodeRef).setText(text).setOffset(offset).setMaxBytes(maxBytes).build()));
+        return call(ContentServiceGrpc.newBlockingStub(channel), s -> s.getReader(GetContentRequest.newBuilder().setNodeRef(nodeRef).setText(text).setOffset(offset).setMaxBytes(maxBytes).build()));
     }
 
     public Node updateContent(String nodeRef, Content content) {
-        return call(s -> s.updateContent(UpdateContentRequest.newBuilder().setNodeRef(nodeRef).setContent(content).build()));
+        return call(ContentServiceGrpc.newBlockingStub(channel), s -> s.getWriter(UpdateContentRequest.newBuilder().setNodeRef(nodeRef).setContent(content).build()));
     }
 
     /**
@@ -160,7 +161,7 @@ public class NodeServiceClient {
         val written = new AtomicLong();
         val ticket = tickets.ticket();
         try {
-            return download(authenticated(ticket), request, out, written);
+            return download(authenticated(ContentServiceGrpc.newBlockingStub(channel), ticket), request, out, written);
         } catch (StatusRuntimeException e) {
             if (e.getStatus().getCode() != Status.Code.UNAUTHENTICATED || written.get() > 0)
                 throw e;
@@ -168,11 +169,11 @@ public class NodeServiceClient {
             val renewed = tickets.ticket();
             if (renewed.equals(ticket))
                 throw e;
-            return download(authenticated(renewed), request, out, written);
+            return download(authenticated(ContentServiceGrpc.newBlockingStub(channel), renewed), request, out, written);
         }
     }
 
-    private ContentInfo download(NodeServiceBlockingStub s, DownloadContentRequest request, OutputStream out, AtomicLong written) {
+    private ContentInfo download(ContentServiceGrpc.ContentServiceBlockingStub s, DownloadContentRequest request, OutputStream out, AtomicLong written) {
         ContentInfo info = null;
         val parts = s.downloadContent(request);
         while (parts.hasNext()) {
@@ -211,7 +212,7 @@ public class NodeServiceClient {
     public Node uploadContent(CreateDocumentHeader header, InputStream data) {
         val ticket = tickets.ticket();
         val upload = new Upload();
-        val sender = NodeServiceGrpc.newStub(channel).withInterceptors(ticketHeader(ticket)).withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS).uploadContent(upload);
+        val sender = ContentServiceGrpc.newStub(channel).withInterceptors(ticketHeader(ticket)).withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS).uploadContent(upload);
         try {
             sender.onNext(UploadContentRequest.newBuilder().setHeader(header).build());
             val buffer = new byte[UPLOAD_CHUNK_SIZE];
@@ -257,25 +258,21 @@ public class NodeServiceClient {
 
         private ClientCallStreamObserver<UploadContentRequest> requests;
 
-        @Override
-        public void beforeStart(ClientCallStreamObserver<UploadContentRequest> requests) {
+        @Override public void beforeStart(ClientCallStreamObserver<UploadContentRequest> requests) {
             this.requests = requests;
             requests.setOnReadyHandler(this::wake);
         }
 
-        @Override
-        public void onNext(Node value) {
+        @Override public void onNext(Node value) {
             response.complete(value);
         }
 
-        @Override
-        public void onError(Throwable t) {
+        @Override public void onError(Throwable t) {
             response.completeExceptionally(t);
             wake();
         }
 
-        @Override
-        public void onCompleted() {
+        @Override public void onCompleted() {
             wake();
         }
 
@@ -303,31 +300,34 @@ public class NodeServiceClient {
      * @param sort sort criteria, applied in order (afts only); empty to sort by relevance
      */
     public SearchResponse search(String query, String language, int skipCount, int maxItems, List<SortField> sort) {
-        return call(s -> s.search(SearchRequest.newBuilder().setQuery(query).setLanguage(language).setSkipCount(skipCount).setMaxItems(maxItems).addAllSort(sort).build()));
+        return call(SearchServiceGrpc.newBlockingStub(channel), s -> s.query(SearchRequest.newBuilder().setQuery(query).setLanguage(language).setSkipCount(skipCount).setMaxItems(maxItems).addAllSort(sort).build()));
     }
 
     public ListModelsResponse listModels(String model, boolean includeProperties) {
-        return call(s -> s.listModels(ListModelsRequest.newBuilder().setModel(model).setIncludeProperties(includeProperties).build()));
+        return call(DictionaryServiceGrpc.newBlockingStub(channel), s -> s.getAllModels(ListModelsRequest.newBuilder().setModel(model).setIncludeProperties(includeProperties).build()));
     }
 
     private <T> T call(Function<NodeServiceBlockingStub, T> rpc) {
+        return call(stub, rpc);
+    }
+
+    private <S extends AbstractBlockingStub<S>, T> T call(S service, Function<S, T> rpc) {
         val ticket = tickets.ticket();
         try {
-            return rpc.apply(authenticated(ticket));
+            return rpc.apply(authenticated(service, ticket));
         } catch (StatusRuntimeException e) {
             if (e.getStatus().getCode() != Status.Code.UNAUTHENTICATED)
                 throw e;
             tickets.invalidate(ticket);
             val renewed = tickets.ticket();
-            // the provider cannot renew it: retrying would fail again
             if (renewed.equals(ticket))
                 throw e;
-            return rpc.apply(authenticated(renewed));
+            return rpc.apply(authenticated(service, renewed));
         }
     }
 
-    private NodeServiceBlockingStub authenticated(String ticket) {
-        return stub.withInterceptors(ticketHeader(ticket)).withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS);
+    private <S extends AbstractBlockingStub<S>> S authenticated(S service, String ticket) {
+        return service.withInterceptors(ticketHeader(ticket)).withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     private static ClientInterceptor ticketHeader(String ticket) {

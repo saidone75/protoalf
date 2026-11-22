@@ -27,7 +27,7 @@ public class AlfrescoConfiguration {
     }
 
     /**
-     * Logs in through the Login RPC lazily, on the first tool call: every call runs as the configured user.
+     * Logs in through the Authenticate RPC lazily, on the first tool call: every call runs as the configured user.
      */
     @Bean
     TicketProvider alfrescoTicketProvider(ManagedChannel alfrescoGrpcChannel, AlfrescoProperties properties) {

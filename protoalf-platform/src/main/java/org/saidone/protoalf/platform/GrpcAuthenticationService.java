@@ -21,7 +21,7 @@ public final class GrpcAuthenticationService extends AuthenticationServiceGrpc.A
 
     private final AuthenticationService authentication;
 
-    @Override public void login(LoginRequest request, StreamObserver<LoginResponse> observer) {
+    @Override public void authenticate(LoginRequest request, StreamObserver<LoginResponse> observer) {
         val user = request.getUser();
         val password = request.getPassword();
         if (user.isBlank() || password.isBlank()) {

@@ -13,8 +13,11 @@ import org.alfresco.repo.security.authentication.AuthenticationUtil;
 import org.alfresco.repo.security.permissions.AccessDeniedException;
 import org.alfresco.repo.transaction.RetryingTransactionHelper;
 import org.alfresco.service.ServiceRegistry;
+import org.alfresco.service.cmr.dictionary.AspectDefinition;
+import org.alfresco.service.cmr.dictionary.DataTypeDefinition;
 import org.alfresco.service.cmr.dictionary.DictionaryService;
 import org.alfresco.service.cmr.dictionary.PropertyDefinition;
+import org.alfresco.service.cmr.dictionary.TypeDefinition;
 import org.alfresco.service.cmr.lock.NodeLockedException;
 import org.alfresco.service.cmr.model.FileExistsException;
 import org.alfresco.service.cmr.model.FileFolderService;
@@ -40,6 +43,7 @@ import org.saidone.protoalf.api.*;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -49,7 +53,7 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-class GrpcNodeServiceTest {
+class GrpcRepositoryServiceTest {
 
     @BeforeAll
     static void initializeAuthentication() throws Exception {
@@ -172,7 +176,7 @@ class GrpcNodeServiceTest {
 
     @Test
     void everyAliasMapsToANodeLocator() {
-        assertEquals(Map.of("-root-", "companyhome", "-my-", "userhome", "-shared-", "sharedhome"), GrpcNodeService.ALIASES);
+        assertEquals(Map.of("-root-", "companyhome", "-my-", "userhome", "-shared-", "sharedhome"), GrpcServiceSupport.ALIASES);
     }
 
     @Test
@@ -202,7 +206,7 @@ class GrpcNodeServiceTest {
 
     private static Result<SearchResponse> search(ServiceRegistry services, SearchRequest request) {
         val result = new Result<SearchResponse>();
-        Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> new GrpcNodeService(services).search(request, result));
+        Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> new GrpcSearchService(services).query(request, result));
         return result;
     }
 
@@ -238,7 +242,7 @@ class GrpcNodeServiceTest {
         val services = repository(mock(NodeLocatorService.class));
         val searchService = mock(SearchService.class);
         when(services.getSearchService()).thenReturn(searchService);
-        for (val request : List.of(SearchRequest.newBuilder().setQuery(" ").build(), SearchRequest.newBuilder().setQuery("x".repeat(GrpcNodeService.MAX_QUERY_LENGTH + 1)).build(), SearchRequest.newBuilder().setQuery("x").setLanguage("lucene").build(), SearchRequest.newBuilder().setQuery("x").setMaxItems(1001).build())) {
+        for (val request : List.of(SearchRequest.newBuilder().setQuery(" ").build(), SearchRequest.newBuilder().setQuery("x".repeat(GrpcSearchService.MAX_QUERY_LENGTH + 1)).build(), SearchRequest.newBuilder().setQuery("x").setLanguage("lucene").build(), SearchRequest.newBuilder().setQuery("x").setMaxItems(1001).build())) {
             assertEquals(Status.Code.INVALID_ARGUMENT, Status.fromThrowable(search(services, request).error).getCode(), request.toString());
         }
         verifyNoInteractions(searchService);
@@ -290,7 +294,7 @@ class GrpcNodeServiceTest {
         val searchService = mock(SearchService.class);
         val services = searchable(searchService);
         val tooMany = SearchRequest.newBuilder().setQuery("x");
-        for (int i = 0; i <= GrpcNodeService.MAX_SORT_FIELDS; i++) tooMany.addSort(SortField.newBuilder().setField("cm:modified"));
+        for (int i = 0; i <= GrpcSearchService.MAX_SORT_FIELDS; i++) tooMany.addSort(SortField.newBuilder().setField("cm:modified"));
         for (val request : List.of(SearchRequest.newBuilder().setQuery("x").addSort(SortField.newBuilder().setField("cm:unknown")).build(), SearchRequest.newBuilder().setQuery("x").addSort(SortField.newBuilder().setField("zz:modified")).build(), SearchRequest.newBuilder().setQuery("x").addSort(SortField.newBuilder().setField("")).build(), SearchRequest.newBuilder().setQuery("SELECT * FROM cmis:document").setLanguage("cmis").addSort(SortField.newBuilder().setField("cm:modified")).build(), tooMany.build())) {
             assertEquals(Status.Code.INVALID_ARGUMENT, Status.fromThrowable(search(services, request).error).getCode(), request.toString());
         }
@@ -328,7 +332,7 @@ class GrpcNodeServiceTest {
         when(page.hasMoreItems()).thenReturn(false);
         when(page.getTotalResultCount()).thenReturn(new Pair<>(37, 37));
         val result = new Result<ListChildrenResponse>();
-        Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> new GrpcNodeService(services).listChildren(ListChildrenRequest.newBuilder().setNodeRef(COMPANY_HOME.toString()).setSkipCount(40).build(), result));
+        Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> new GrpcFileFolderService(services).list(ListChildrenRequest.newBuilder().setNodeRef(COMPANY_HOME.toString()).setSkipCount(40).build(), result));
         assertNull(result.error);
         assertEquals(37L, result.value.getTotalItems());
         assertFalse(result.value.getHasMoreItems());
@@ -348,7 +352,7 @@ class GrpcNodeServiceTest {
         when(files.list(any(NodeRef.class), eq(true), eq(true), isNull(), isNull(), anyList(), any(PagingRequest.class))).thenReturn(page);
         when(page.getPage()).thenReturn(List.of());
         val result = new Result<ListChildrenResponse>();
-        Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> new GrpcNodeService(services).listChildren(ListChildrenRequest.newBuilder().setNodeRef(COMPANY_HOME.toString()).build(), result));
+        Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> new GrpcFileFolderService(services).list(ListChildrenRequest.newBuilder().setNodeRef(COMPANY_HOME.toString()).build(), result));
         assertNull(result.error);
         assertEquals(-1L, result.value.getTotalItems());
     }
@@ -377,7 +381,7 @@ class GrpcNodeServiceTest {
         when(services.getFileFolderService()).thenReturn(files);
         when(files.copy(any(NodeRef.class), any(NodeRef.class), isNull())).thenThrow(new FileExistsException(COMPANY_HOME, "doc"));
         val result = new Result<Node>();
-        Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> new GrpcNodeService(services).copyNode(CopyNodeRequest.newBuilder().setNodeRef("doc").setTargetParentRef("folder").build(), result));
+        Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> new GrpcFileFolderService(services).copy(CopyNodeRequest.newBuilder().setNodeRef("doc").setTargetParentRef("folder").build(), result));
         val status = Status.fromThrowable(result.error);
         assertEquals(Status.Code.ALREADY_EXISTS, status.getCode());
         assertNull(result.value);
@@ -398,7 +402,7 @@ class GrpcNodeServiceTest {
     void anonymousDownloadNeverTouchesRepository() {
         val services = mock(ServiceRegistry.class);
         val result = new Result<DownloadContentResponse>();
-        new GrpcNodeService(services).downloadContent(DownloadContentRequest.getDefaultInstance(), result);
+        new GrpcContentService(services).downloadContent(DownloadContentRequest.getDefaultInstance(), result);
         assertEquals(Status.Code.UNAUTHENTICATED, Status.fromThrowable(result.error).getCode());
         verify(services, never()).getTransactionService();
     }
@@ -407,7 +411,7 @@ class GrpcNodeServiceTest {
     void anonymousUploadNeverTouchesRepository() {
         val services = mock(ServiceRegistry.class);
         val result = new Result<Node>();
-        new GrpcNodeService(services).uploadContent(result);
+        new GrpcContentService(services).uploadContent(result);
         assertEquals(Status.Code.UNAUTHENTICATED, Status.fromThrowable(result.error).getCode());
         verify(services, never()).getTransactionService();
     }
@@ -429,7 +433,7 @@ class GrpcNodeServiceTest {
         val services = mock(ServiceRegistry.class);
         val result = new Result<Node>();
         val before = uploadSpools();
-        Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> new GrpcNodeService(services).uploadContent(result).onNext(data("no header")));
+        Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> new GrpcContentService(services).uploadContent(result).onNext(data("no header")));
         assertEquals(Status.Code.INVALID_ARGUMENT, Status.fromThrowable(result.error).getCode());
         assertFalse(result.complete);
         assertEquals(before, uploadSpools());
@@ -443,7 +447,7 @@ class GrpcNodeServiceTest {
         for (val later : new UploadContentRequest[] { HEADER, UploadContentRequest.getDefaultInstance() }) {
             val result = new Result<Node>();
             Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> {
-                val upload = new GrpcNodeService(services).uploadContent(result);
+                val upload = new GrpcContentService(services).uploadContent(result);
                 upload.onNext(HEADER);
                 upload.onNext(later);
                 upload.onNext(data("ignored"));
@@ -462,7 +466,7 @@ class GrpcNodeServiceTest {
         val result = new Result<Node>();
         val before = uploadSpools();
         Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> {
-            val upload = new GrpcNodeService(services).upload(result, 4);
+            val upload = new GrpcContentService(services).upload(result, 4);
             upload.onNext(HEADER);
             upload.onNext(data("1234"));
             upload.onNext(data("5"));
@@ -477,6 +481,93 @@ class GrpcNodeServiceTest {
 
     @Test
     void uploadMaxSizeIsTwoGiB() {
-        assertEquals(2L * 1024 * 1024 * 1024, GrpcNodeService.MAX_UPLOAD_BYTES);
+        assertEquals(2L * 1024 * 1024 * 1024, GrpcContentService.MAX_UPLOAD_BYTES);
+    }
+
+    @Test
+    void nativeNodeGettersPreservePropertyTypesAndAspects() {
+        val services = repository(mock(NodeLocatorService.class));
+        val ref = new NodeRef("workspace://SpacesStore/doc");
+        when(services.getNodeService().getProperties(ref)).thenReturn(Map.of(ContentModel.PROP_TITLE, "Budget", ContentModel.PROP_DESCRIPTION, new ArrayList<>(List.of("one", "two"))));
+        when(services.getNodeService().getAspects(ref)).thenReturn(Set.of(ContentModel.ASPECT_TITLED));
+        val service = new GrpcNodeService(services);
+        val request = NodeRefRequest.newBuilder().setNodeRef(ref.toString()).build();
+        val properties = new Result<NodeProperties>();
+        val type = new Result<NodeType>();
+        val aspects = new Result<NodeAspects>();
+        Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> {
+            service.getProperties(request, properties);
+            service.getType(request, type);
+            service.getAspects(request, aspects);
+        });
+        assertNull(properties.error);
+        assertNull(type.error);
+        assertNull(aspects.error);
+        assertEquals("Budget", properties.value.getPropertiesOrThrow(ContentModel.PROP_TITLE.toString()).getValues(0).getStringValue());
+        assertTrue(properties.value.getPropertiesOrThrow(ContentModel.PROP_DESCRIPTION.toString()).getMultiValued());
+        assertEquals(2, properties.value.getPropertiesOrThrow(ContentModel.PROP_DESCRIPTION.toString()).getValuesCount());
+        assertEquals(ContentModel.TYPE_FOLDER.toString(), type.value.getType());
+        assertEquals(List.of(ContentModel.ASPECT_TITLED.toString()), aspects.value.getAspectsList());
+    }
+
+    @Test
+    void emptyAddPropertiesDoesNotReplaceExistingMetadata() {
+        val services = repository(mock(NodeLocatorService.class));
+        val response = new Result<Node>();
+        Context.current().withValue(TicketInterceptor.USER, "writer").run(() -> new GrpcNodeService(services).addProperties(AddPropertiesRequest.newBuilder().setNodeRef("doc").build(), response));
+        assertNull(response.error);
+        assertTrue(response.complete);
+        verify(services.getNodeService(), never()).setProperties(any(), any());
+        verify(services.getNodeService(), never()).addProperties(any(), any());
+        verify(transactions(services)).doInTransaction(any(), eq(false));
+    }
+
+    @Test
+    void blankSetTypeIsRejectedWithoutChangingTheRepository() {
+        val services = repository(mock(NodeLocatorService.class));
+        val response = new Result<Node>();
+        Context.current().withValue(TicketInterceptor.USER, "writer").run(() -> new GrpcNodeService(services).setType(SetTypeRequest.newBuilder().setNodeRef("doc").build(), response));
+        assertEquals(Status.Code.INVALID_ARGUMENT, Status.fromThrowable(response.error).getCode());
+        verify(services.getNodeService(), never()).setType(any(), any());
+    }
+
+    @Test
+    void nativeNodeMutationsDelegateToTheCorrespondingAlfrescoOperations() {
+        val services = repository(mock(NodeLocatorService.class));
+        val namespaces = mock(NamespaceService.class);
+        val dictionary = mock(DictionaryService.class);
+        when(services.getNamespaceService()).thenReturn(namespaces);
+        when(services.getDictionaryService()).thenReturn(dictionary);
+        when(namespaces.getNamespaceURI("cm")).thenReturn(NamespaceService.CONTENT_MODEL_1_0_URI);
+        when(dictionary.getType(ContentModel.TYPE_FOLDER)).thenReturn(mock(TypeDefinition.class));
+        when(dictionary.isSubClass(ContentModel.TYPE_FOLDER, ContentModel.TYPE_FOLDER)).thenReturn(true);
+        when(dictionary.getAspect(ContentModel.ASPECT_TITLED)).thenReturn(mock(AspectDefinition.class));
+        val property = mock(PropertyDefinition.class);
+        val dataType = mock(DataTypeDefinition.class);
+        when(dataType.getJavaClassName()).thenReturn("java.lang.String");
+        when(property.getDataType()).thenReturn(dataType);
+        when(dictionary.getProperty(ContentModel.PROP_TITLE)).thenReturn(property);
+        val ref = new NodeRef("workspace://SpacesStore/doc");
+        val service = new GrpcNodeService(services);
+        val properties = new Result<Node>();
+        val type = new Result<Node>();
+        val added = new Result<Node>();
+        val removed = new Result<Node>();
+        Context.current().withValue(TicketInterceptor.USER, "writer").run(() -> {
+            service.addProperties(AddPropertiesRequest.newBuilder().setNodeRef("doc").putProperties("cm:title", "Budget").build(), properties);
+            service.setType(SetTypeRequest.newBuilder().setNodeRef("doc").setType("cm:folder").build(), type);
+            service.addAspect(AddAspectRequest.newBuilder().setNodeRef("doc").setAspect("cm:titled").build(), added);
+            when(services.getNodeService().hasAspect(ref, ContentModel.ASPECT_TITLED)).thenReturn(true);
+            service.removeAspect(RemoveAspectRequest.newBuilder().setNodeRef("doc").setAspect("cm:titled").build(), removed);
+        });
+        for (val response : List.of(properties, type, added, removed)) {
+            assertNull(response.error);
+            assertTrue(response.complete);
+        }
+        verify(services.getNodeService()).addProperties(ref, Map.of(ContentModel.PROP_TITLE, "Budget"));
+        verify(services.getNodeService()).setType(ref, ContentModel.TYPE_FOLDER);
+        verify(services.getNodeService()).addAspect(eq(ref), eq(ContentModel.ASPECT_TITLED), anyMap());
+        verify(services.getNodeService()).removeAspect(ref, ContentModel.ASPECT_TITLED);
+        verify(services.getNodeService(), never()).setProperties(any(), any());
     }
 }

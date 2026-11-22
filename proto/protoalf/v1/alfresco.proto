@@ -3,37 +3,54 @@ package protoalf.v1;
 option java_package = "org.saidone.protoalf.api";
 option java_multiple_files = true;
 
+// Services follow the corresponding Alfresco repository APIs. Protobuf DTOs replace local Java objects.
 service AuthenticationService {
- // AuthenticationService
- rpc Login(LoginRequest) returns (LoginResponse);
+ // Authenticates and returns the ticket of the authenticated user in the same call.
+ rpc Authenticate(LoginRequest) returns (LoginResponse);
 }
 
 service NodeService {
- // NodeService
+ rpc GetProperties(NodeRefRequest) returns (NodeProperties);
+ rpc AddProperties(AddPropertiesRequest) returns (Node);
+ rpc GetType(NodeRefRequest) returns (NodeType);
+ rpc SetType(SetTypeRequest) returns (Node);
+ rpc GetAspects(NodeRefRequest) returns (NodeAspects);
+ rpc AddAspect(AddAspectRequest) returns (Node);
+ rpc RemoveAspect(RemoveAspectRequest) returns (Node);
+ rpc DeleteNode(DeleteNodeRequest) returns (DeleteNodeResponse);
+ // Convenience extensions: snapshot and atomic metadata update across several Alfresco operations.
  rpc GetNode(GetNodeRequest) returns (Node);
  rpc UpdateNode(UpdateNodeRequest) returns (Node);
- rpc DeleteNode(DeleteNodeRequest) returns (DeleteNodeResponse);
+}
 
- // FileFolderService
- rpc ListChildren(ListChildrenRequest) returns (ListChildrenResponse);
- rpc CreateNode(CreateNodeRequest) returns (Node);
- rpc MoveNode(MoveNodeRequest) returns (Node);
- rpc CopyNode(CopyNodeRequest) returns (Node);
+service FileFolderService {
+ rpc List(ListChildrenRequest) returns (ListChildrenResponse);
+ rpc Create(CreateNodeRequest) returns (Node);
+ rpc Move(MoveNodeRequest) returns (Node);
+ rpc Copy(CopyNodeRequest) returns (Node);
+}
 
- // SearchService
- rpc Search(SearchRequest) returns (SearchResponse);
-
- // ContentService
- rpc GetContent(GetContentRequest) returns (GetContentResponse);
+service ContentService {
+ // Remote adaptations: materialize a reader slice or write supplied bytes, rather than return local Java handles.
+ rpc GetReader(GetContentRequest) returns (GetContentResponse);
+ rpc GetWriter(UpdateContentRequest) returns (Node);
+ // Streaming extensions for downloads and creation of large documents.
  rpc DownloadContent(DownloadContentRequest) returns (stream DownloadContentResponse);
- rpc UpdateContent(UpdateContentRequest) returns (Node);
  rpc UploadContent(stream UploadContentRequest) returns (Node);
+}
 
- // VersionService
- rpc ListVersions(ListVersionsRequest) returns (ListVersionsResponse);
+service VersionService {
+ rpc GetVersionHistory(ListVersionsRequest) returns (ListVersionsResponse);
+}
 
- // DictionaryService
- rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+service SearchService {
+ rpc Query(SearchRequest) returns (SearchResponse);
+}
+
+service DictionaryService {
+ // Optional model/prefix filter and property expansion are remote convenience parameters.
+ rpc GetAllModels(ListModelsRequest) returns (ListModelsResponse);
+ rpc GetModel(ListModelsRequest) returns (ModelInfo);
 }
 
 // Common: node, properties and their values
@@ -94,3 +111,13 @@ message ModelInfo { string name = 1; string description = 2; repeated NamespaceI
 message NamespaceInfo { string prefix = 1; string uri = 2; }
 message ClassInfo { string name = 1; string title = 2; string parent = 3; repeated string mandatory_aspects = 4; repeated PropertyInfo properties = 5; }
 message PropertyInfo { string name = 1; string title = 2; string data_type = 3; bool mandatory = 4; bool multi_valued = 5; bool read_only = 6; }
+
+// NodeService primitives: names and parameters mirror Alfresco's NodeService.
+message NodeRefRequest { string node_ref = 1; }
+message NodeProperties { map<string, Property> properties = 1; }
+message NodeType { string type = 1; }
+message NodeAspects { repeated string aspects = 1; }
+message AddPropertiesRequest { string node_ref = 1; map<string, string> properties = 2; map<string, PropertyValues> property_values = 3; }
+message SetTypeRequest { string node_ref = 1; string type = 2; }
+message AddAspectRequest { string node_ref = 1; string aspect = 2; map<string, string> properties = 3; map<string, PropertyValues> property_values = 4; }
+message RemoveAspectRequest { string node_ref = 1; string aspect = 2; }

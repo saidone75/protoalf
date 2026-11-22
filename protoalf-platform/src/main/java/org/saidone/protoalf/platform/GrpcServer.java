@@ -11,6 +11,7 @@ import org.alfresco.service.ServiceRegistry;
 import java.io.File;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.List;
 import java.util.concurrent.*;
 
 @Slf4j
@@ -56,9 +57,11 @@ public final class GrpcServer {
         executor = new ThreadPoolExecutor(threads, threads, 0, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1024), new ThreadPoolExecutor.AbortPolicy());
         try {
             val tickets = new TicketInterceptor(services.getAuthenticationService());
-            // Intercepted too: the interceptor lets Login through and rejects anything else without a ticket.
-            val builder = NettyServerBuilder.forAddress(new InetSocketAddress(host, port)).executor(executor).maxInboundMessageSize(maxMessageSize).maxConcurrentCallsPerConnection(100)
-                    .addService(ServerInterceptors.intercept(new GrpcAuthenticationService(services.getAuthenticationService()), tickets)).addService(ServerInterceptors.intercept(new GrpcNodeService(services, transforms), tickets));
+            // Intercepted too: the interceptor lets Authenticate through and rejects anything else without a ticket.
+            val builder = NettyServerBuilder.forAddress(new InetSocketAddress(host, port)).executor(executor).maxInboundMessageSize(maxMessageSize).maxConcurrentCallsPerConnection(100);
+            for (val service : List.of(new GrpcAuthenticationService(services.getAuthenticationService()), new GrpcNodeService(services), new GrpcFileFolderService(services), new GrpcContentService(services, transforms), new GrpcVersionService(services), new GrpcSearchService(services), new GrpcDictionaryService(services))) {
+                builder.addService(ServerInterceptors.intercept(service, tickets));
+            }
             if (tls)
                 builder.useTransportSecurity(new File(certificate), new File(privateKey));
             server = builder.build().start();

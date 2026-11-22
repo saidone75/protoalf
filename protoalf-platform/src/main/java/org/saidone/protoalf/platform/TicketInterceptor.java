@@ -19,12 +19,12 @@ public final class TicketInterceptor implements ServerInterceptor {
     /**
      * The only method callable without a ticket: it is how a ticket is obtained.
      */
-    static final String LOGIN_METHOD = AuthenticationServiceGrpc.getLoginMethod().getFullMethodName();
+    static final String AUTHENTICATE_METHOD = AuthenticationServiceGrpc.getAuthenticateMethod().getFullMethodName();
     private static final Metadata.Key<String> TICKET = Metadata.Key.of("alfresco-ticket", Metadata.ASCII_STRING_MARSHALLER);
     private final AuthenticationService authentication;
 
     @Override public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
-        if (isLogin(call))
+        if (isAuthenticate(call))
             return next.startCall(call, headers);
         val ticket = headers.get(TICKET);
         if (ticket == null || ticket.isBlank()) {
@@ -47,8 +47,8 @@ public final class TicketInterceptor implements ServerInterceptor {
         return Contexts.interceptCall(Context.current().withValue(USER, user), call, headers, next);
     }
 
-    private static boolean isLogin(ServerCall<?, ?> call) {
+    private static boolean isAuthenticate(ServerCall<?, ?> call) {
         val method = call.getMethodDescriptor();
-        return method != null && LOGIN_METHOD.equals(method.getFullMethodName());
+        return method != null && AUTHENTICATE_METHOD.equals(method.getFullMethodName());
     }
 }

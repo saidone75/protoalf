@@ -56,6 +56,28 @@ claude mcp add --transport http alfresco http://localhost:8090/mcp
 
 Any other MCP client supporting the Streamable HTTP transport can use the same URL.
 
+## Repository services
+
+The platform exposes separate gRPC services corresponding to Alfresco's repository services:
+
+| Alfresco API | Platform adapter | RPC operations |
+|---|---|---|
+| `AuthenticationService` | `GrpcAuthenticationService` | `Authenticate` (credentials → ticket) |
+| `NodeService` | `GrpcNodeService` | `GetProperties`, `AddProperties`, `GetType`, `SetType`, `GetAspects`, `AddAspect`, `RemoveAspect`, `DeleteNode` |
+| `FileFolderService` | `GrpcFileFolderService` | `List`, `Create`, `Move`, `Copy` |
+| `VersionService` | `GrpcVersionService` | `GetVersionHistory` |
+| `ContentService` | `GrpcContentService` | `GetReader`, `GetWriter`, `DownloadContent`, `UploadContent` |
+| `SearchService` | `GrpcSearchService` | `Query` |
+| `DictionaryService` | `GrpcDictionaryService` | `GetAllModels`, `GetModel` |
+
+Names and parameters follow the corresponding Alfresco operations, using Protobuf messages instead of local Java objects. This is a supported subset of the Alfresco APIs. `GetReader` returns a content slice and `GetWriter` writes the supplied bytes; streaming extensions handle large content. `Authenticate` combines authentication and ticket retrieval. `GetAllModels` supports optional filtering and property expansion; `GetModel` takes a qualified model name.
+
+`NodeService.GetNode` and `UpdateNode` remain convenience extensions for a complete node snapshot and an atomic metadata update. `AddProperties` merges the supplied metadata; it does not replace the whole property map. Write validation and permissions apply to both primitive operations and convenience methods.
+
+`GrpcServiceSupport` centralizes ticket context, transactions, node references and gRPC error mapping. Every service is registered with the same authentication interceptor.
+
+The Java `NodeServiceClient` remains a convenience facade and dispatches each call to the appropriate service. Existing facade method names and MCP tools are unchanged. **The generated gRPC API has changed:** consumers using generated stubs directly must regenerate them and update the service/method names shown above. Rebuild both platform and client together.
+
 ## Use the Java client
 
 ```xml
@@ -68,8 +90,8 @@ Any other MCP client supporting the Streamable HTTP transport can use the same U
 
 ```java
 ManagedChannel channel = AlfrescoGrpcChannels.create("localhost", 9090, "/path/to/ca.crt", null);
-var tickets = new AuthenticationServiceClient(channel, "mcp", "example", Duration.ofSeconds(30));
-var client = new NodeServiceClient(channel, tickets, Duration.ofSeconds(30));
+val tickets = new AuthenticationServiceClient(channel, "mcp", "example", Duration.ofSeconds(30));
+val client = new NodeServiceClient(channel, tickets, Duration.ofSeconds(30));
 
 Node home = client.getNode("-my-");
 SearchResponse docs = client.search("SELECT * FROM cmis:document WHERE cmis:name LIKE 'budget%'", "cmis", 0, 25);
@@ -78,7 +100,7 @@ channel.shutdownNow();
 ```
 
 * `AuthenticationServiceClient` is the client of `AuthenticationService`. Built with user and password it is the
-  `TicketProvider` of `NodeServiceClient`: it logs in through `Login` lazily and caches the ticket. On `UNAUTHENTICATED`
+  `TicketProvider` of `NodeServiceClient`: it logs in through `Authenticate` lazily and caches the ticket. On `UNAUTHENTICATED`
   the client logs in again and retries the call once. `login(user, password)` exchanges any credentials for a ticket.
   Everything goes over gRPC: the client never calls Alfresco's REST API.
 * `downloadContent(nodeRef, out)` and `uploadContent(header, in)` stream the bytes. `uploadContent` is not retried on
@@ -137,7 +159,7 @@ cannot read the parent.
 
 ## Search
 
-`NodeService.Search` runs an AFTS (default, `language: "afts"`) or CMIS SQL (`language: "cmis"`) query as the
+`SearchService.Query` runs an AFTS (default, `language: "afts"`) or CMIS SQL (`language: "cmis"`) query as the
 calling user through Alfresco Search Services, so results are permission filtered and reflect the index, which can
 lag a few seconds behind the repository. The MCP tool `alfresco_search` exposes AFTS only, e.g.
 `cm:name:"budget*" AND TYPE:"cm:content"`, `TEXT:"invoice"`, `PATH:"/app:company_home/cm:Projects//*"`.
@@ -150,7 +172,7 @@ text, e.g. `sort: "cm:modified desc, cm:name"`.
 
 ## Content models
 
-`NodeService.ListModels` (MCP tool `alfresco_list_models`) describes the data dictionary through the
+`DictionaryService.GetAllModels` (MCP tool `alfresco_list_models`) describes the data dictionary through the
 `DictionaryService`: every deployed content model with its namespaces, types and aspects (name, title, parent,
 mandatory aspects). Filter by namespace prefix (`cm`) or model name (`cm:contentmodel`); with `include_properties`
 (which requires the filter) each type/aspect also lists the properties it defines, with data type and the
@@ -161,11 +183,11 @@ model finds the right `TYPE:"..."` for a search or the property names to set wit
 
 | gRPC | MCP tool | What |
 |---|---|---|
-| `CreateNode` | `alfresco_create_folder`, `alfresco_create_document` | New folder, or document with text (`content`) or base64 (`contentBase64`) content |
-| `UpdateNode` | `alfresco_update_node` | Rename, change type and/or set metadata |
-| `UpdateContent` | `alfresco_update_content` | Replace the content of a document |
-| `MoveNode` / `CopyNode` | `alfresco_move_node` / `alfresco_copy_node` | Move or (deep) copy into a folder, optionally with a new name |
-| `DeleteNode` | `alfresco_delete_node` | Move to the trashcan (restorable); Company Home, Shared Files and the user home are refused |
+| `FileFolderService.Create` | `alfresco_create_folder`, `alfresco_create_document` | New folder, or document with text (`content`) or base64 (`contentBase64`) content |
+| `NodeService.UpdateNode` | `alfresco_update_node` | Rename, change type and/or set metadata |
+| `ContentService.GetWriter` | `alfresco_update_content` | Replace the content of a document |
+| `FileFolderService.Move` / `FileFolderService.Copy` | `alfresco_move_node` / `alfresco_copy_node` | Move or (deep) copy into a folder, optionally with a new name |
+| `NodeService.DeleteNode` | `alfresco_delete_node` | Move to the trashcan (restorable); Company Home, Shared Files and the user home are refused |
 
 Metadata is passed as property name → text, e.g. `{"cm:title": "Budget", "cm:description": "Draft"}`, converted to the
 property type (dates in ISO 8601). Protected (`cm:created`, ...) and `sys:` properties are rejected; aspects such as
@@ -173,11 +195,11 @@ property type (dates in ISO 8601). Protected (`cm:created`, ...) and `sys:` prop
 constraints (`FAILED_PRECONDITION`). Requests are limited to `protoalf.max-message-size` (16 MB): this limits
 non-streaming requests, including their metadata. For larger documents, use `UploadContent` (see below).
 
-`property_values` (CreateNode, UpdateNode, the UploadContent header) takes a list of values per property, e.g.
+`property_values` (FileFolderService.Create, NodeService.UpdateNode, the UploadContent header) takes a list of values per property, e.g.
 `{"cm:taggable": ["finance", "2026"]}`: a multi-valued property gets the whole list (empty = unset), a single-valued one
 accepts zero or one value. A property must not be in both `properties` and `property_values`.
 
-`aspects` (CreateNode, UploadContent header) and `add_aspects` / `remove_aspects` (UpdateNode) add and remove aspects
+`aspects` (FileFolderService.Create, UploadContent header) and `add_aspects` / `remove_aspects` (NodeService.UpdateNode) add and remove aspects
 such as `cm:taggable`. Only known aspects outside the `sys:` namespace are accepted; an aspect already present (or
 absent, for removal) is ignored. Aspects are added before the properties are set, so their properties can be written.
 
@@ -185,18 +207,18 @@ absent, for removal) is ignored. Aspects are added before the properties are set
 
 | gRPC | What |
 |---|---|
-| `AuthenticationService.Login` | User and password → Alfresco ticket. The only RPC callable without the `alfresco-ticket` header. Wrong credentials are `UNAUTHENTICATED` |
+| `AuthenticationService.Authenticate` | User and password → Alfresco ticket. The only RPC callable without the `alfresco-ticket` header. Wrong credentials are `UNAUTHENTICATED` |
 | `DownloadContent` (server streaming) | Stored bytes of a document: one info message (mimetype, encoding, size), then data chunks of at most 1 MB |
-| `UploadContent` (client streaming) | New document: the header first (parent, name, type, properties, mimetype, encoding), then data chunks of at most 1 MB. Limited to 2 GiB (`GrpcNodeService.MAX_UPLOAD_BYTES`), larger uploads are `INVALID_ARGUMENT`. Not limited by `max-message-size`, since each message is small |
+| `UploadContent` (client streaming) | New document: the header first (parent, name, type, properties, mimetype, encoding), then data chunks of at most 1 MB. Limited to 2 GiB (`GrpcContentService.MAX_UPLOAD_BYTES`), larger uploads are `INVALID_ARGUMENT`. Not limited by `max-message-size`, since each message is small |
 
-The client of `Login` is `AuthenticationServiceClient`; the other RPCs belong to `NodeService` (`NodeServiceClient`).
+The client of `Authenticate` is `AuthenticationServiceClient`; `NodeServiceClient` dispatches the remaining RPCs to the corresponding repository services.
 
 ## Versions
 
-`NodeService.ListVersions` returns the version history of a document through the `VersionService`, newest first
+`VersionService.GetVersionHistory` returns the version history of a document through the `VersionService`, newest first
 (empty when the document is not versionable): label, major/minor, description, modifier, date and the frozen
 `Node` with the metadata of that version. Its `version_ref` (`versionStore://version2Store/<id>`) is accepted by
-`GetContent` and `DownloadContent` to read the content of that version.
+`ContentService.GetReader` and `ContentService.DownloadContent` to read the content of that version.
 
 ## The MCP user
 

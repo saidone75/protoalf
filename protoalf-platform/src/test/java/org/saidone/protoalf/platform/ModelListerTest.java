@@ -48,6 +48,7 @@ class ModelListerTest {
     void setUp() {
         val services = mock(ServiceRegistry.class);
         val namespaces = mock(NamespaceService.class);
+        when(namespaces.getNamespaceURI("cm")).thenReturn(CM);
         when(namespaces.getPrefixes(CM)).thenReturn(List.of("cm"));
         when(namespaces.getPrefixes(ACME)).thenReturn(List.of("acme"));
         when(namespaces.getPrefixes(NamespaceService.DICTIONARY_MODEL_1_0_URI)).thenReturn(List.of("d"));
@@ -152,6 +153,20 @@ class ModelListerTest {
     @Test
     void unknownModelIsNotFound() {
         val error = assertThrows(StatusRuntimeException.class, () -> lister.list("nope", false));
+        assertEquals(Status.Code.NOT_FOUND, error.getStatus().getCode());
+    }
+
+    @Test
+    void getModelUsesTheQualifiedNameWithoutScanningAllModels() {
+        assertEquals("cm:contentmodel", lister.getModel("cm:contentmodel", true).getName());
+        verify(dictionary).getModel(CM_MODEL);
+        verify(dictionary, never()).getAllModels();
+    }
+
+    @Test
+    void getModelRequiresAQualifiedNameAndReportsMissingModels() {
+        assertThrows(IllegalArgumentException.class, () -> lister.getModel("cm", false));
+        val error = assertThrows(StatusRuntimeException.class, () -> lister.getModel("cm:missing", false));
         assertEquals(Status.Code.NOT_FOUND, error.getStatus().getCode());
     }
 }

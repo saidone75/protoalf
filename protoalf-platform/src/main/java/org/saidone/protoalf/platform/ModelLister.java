@@ -41,6 +41,23 @@ final class ModelLister {
         return response.build();
     }
 
+    ModelInfo getModel(String name, boolean includeProperties) {
+        QName modelName;
+        try {
+            if (name.isBlank() || !(name.contains(":") || name.startsWith("{")))
+                throw new IllegalArgumentException("model must be a qualified model name (e.g. cm:contentmodel)");
+            modelName = QName.resolveToQName(services.getNamespaceService(), name);
+            if (modelName == null)
+                throw new IllegalArgumentException("Unknown model namespace");
+        } catch (NamespaceException e) {
+            throw new IllegalArgumentException("Unknown model namespace", e);
+        }
+        val definition = services.getDictionaryService().getModel(modelName);
+        if (definition == null)
+            throw Status.NOT_FOUND.withDescription(String.format("No model %s", name)).asRuntimeException();
+        return model(definition, includeProperties);
+    }
+
     private boolean matches(ModelDefinition model, String filter) {
         return prefixed(model.getName()).equals(filter) || model.getName().toString().equals(filter) || model.getNamespaces().stream().anyMatch(namespace -> namespace.getPrefix().equals(filter));
     }

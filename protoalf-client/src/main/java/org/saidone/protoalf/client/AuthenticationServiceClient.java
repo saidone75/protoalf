@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Client of the AuthenticationService of the gRPC module: exchanges user and password for an Alfresco ticket,
- * gRPC only, no REST. Login sends no ticket header: it is the only call that needs none.
+ * gRPC only, no REST. Authenticate sends no ticket header: it is the only call that needs none.
  * <p>
  * Built with credentials it is also the {@link TicketProvider} of a {@link NodeServiceClient}: it logs in lazily,
  * on the first {@link #ticket()}, caches the ticket and logs in again after {@link #invalidate}. Wrong credentials
@@ -57,7 +57,7 @@ public class AuthenticationServiceClient implements TicketProvider {
      * Exchanges user and password for a new ticket. Wrong credentials are UNAUTHENTICATED.
      */
     public String login(String user, String password) {
-        val value = stub.withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS).login(LoginRequest.newBuilder().setUser(user).setPassword(password).build()).getTicket();
+        val value = stub.withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS).authenticate(LoginRequest.newBuilder().setUser(user).setPassword(password).build()).getTicket();
         if (value.isEmpty())
             throw new IllegalStateException("The server returned no ticket for user %s".formatted(user));
         return value;
