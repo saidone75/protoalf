@@ -1,4 +1,4 @@
-package org.saidone.protoalf.client;
+package org.saidone.protoalf.bulkexporter;
 
 import io.grpc.Channel;
 import lombok.AccessLevel;
@@ -7,6 +7,12 @@ import lombok.val;
 import org.saidone.protoalf.api.Node;
 import org.saidone.protoalf.api.Property;
 import org.saidone.protoalf.api.PropertyValue;
+import org.saidone.protoalf.client.ContentServiceClient;
+import org.saidone.protoalf.client.DictionaryServiceClient;
+import org.saidone.protoalf.client.FileFolderServiceClient;
+import org.saidone.protoalf.client.NodeServiceClient;
+import org.saidone.protoalf.client.TicketProvider;
+import org.saidone.protoalf.client.VersionServiceClient;
 
 import java.io.IOException;
 import java.io.Writer;

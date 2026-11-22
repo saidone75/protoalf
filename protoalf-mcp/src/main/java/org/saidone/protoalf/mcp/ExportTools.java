@@ -2,7 +2,7 @@ package org.saidone.protoalf.mcp;
 
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
-import org.saidone.protoalf.client.BulkExporter;
+import org.saidone.protoalf.bulkexporter.BulkExporter;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import tools.jackson.databind.json.JsonMapper;

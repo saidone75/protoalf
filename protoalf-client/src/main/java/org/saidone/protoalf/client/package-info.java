@@ -10,8 +10,5 @@
  * ticket becomes available. Downloads retry only before any payload bytes are written; uploads never replay
  * their input. Callers retain ownership of supplied input/output streams.
  *
- * <p>{@link BulkExporter} is an independent utility that composes the specific service clients for exports. Its
- * channel-based constructor applies a common export deadline; its client-based constructor allows applications
- * to provide separately configured clients.
  */
 package org.saidone.protoalf.client;

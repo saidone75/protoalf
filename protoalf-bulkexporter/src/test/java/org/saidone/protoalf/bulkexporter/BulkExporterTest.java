@@ -1,4 +1,4 @@
-package org.saidone.protoalf.client;
+package org.saidone.protoalf.bulkexporter;
 
 import com.google.protobuf.ByteString;
 import io.grpc.ManagedChannel;
@@ -12,6 +12,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.saidone.protoalf.api.*;
+import org.saidone.protoalf.client.ContentServiceClient;
+import org.saidone.protoalf.client.DictionaryServiceClient;
+import org.saidone.protoalf.client.FileFolderServiceClient;
+import org.saidone.protoalf.client.NodeServiceClient;
+import org.saidone.protoalf.client.TicketProvider;
+import org.saidone.protoalf.client.VersionServiceClient;
 
 import java.nio.file.Files;
 import java.nio.file.Path;

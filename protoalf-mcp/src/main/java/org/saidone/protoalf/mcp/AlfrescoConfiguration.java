@@ -4,7 +4,7 @@ import io.grpc.ManagedChannel;
 import lombok.val;
 import org.saidone.protoalf.client.AlfrescoGrpcChannels;
 import org.saidone.protoalf.client.AuthenticationServiceClient;
-import org.saidone.protoalf.client.BulkExporter;
+import org.saidone.protoalf.bulkexporter.BulkExporter;
 import org.saidone.protoalf.client.ContentServiceClient;
 import org.saidone.protoalf.client.DictionaryServiceClient;
 import org.saidone.protoalf.client.FileFolderServiceClient;

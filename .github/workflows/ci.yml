@@ -41,8 +41,9 @@ jobs:
           path: |
             protoalf-platform/target/protoalf-platform-*.jar
             protoalf-client/target/protoalf-client-*.jar
+            protoalf-bulkexporter/target/protoalf-bulkexporter-*.jar
             protoalf-mcp/target/protoalf-mcp.jar
-            examples/java-client/target/protoalf-example.jar
+            protoalf-examples/target/protoalf-examples.jar
             !**/target/*-tests.jar
           if-no-files-found: error
           retention-days: 7
