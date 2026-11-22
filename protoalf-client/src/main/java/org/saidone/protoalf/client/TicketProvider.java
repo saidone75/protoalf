@@ -8,7 +8,8 @@ public interface TicketProvider {
 
     String ticket();
 
-    default void invalidate(String expired) {}
+    default void invalidate(String expired) {
+    }
 
     static TicketProvider of(String ticket) {
         return () -> ticket;

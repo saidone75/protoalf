@@ -57,9 +57,13 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
     private final ModelLister models;
     private final ContentFetcher contents;
 
-    public GrpcNodeService(ServiceRegistry services) { this(services, null); }
+    public GrpcNodeService(ServiceRegistry services) {
+        this(services, null);
+    }
 
-    /** @param transforms synchronous transforms for text extraction, null when not available */
+    /**
+     * @param transforms synchronous transforms for text extraction, null when not available
+     */
     public GrpcNodeService(ServiceRegistry services, SynchronousTransformClient transforms) {
         this.services = services;
         this.mapper = new NodeMapper(services);
@@ -89,15 +93,11 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
     }
 
     @Override public void createNode(CreateNodeRequest request, StreamObserver<Node> observer) {
-        write(observer, () -> mapper.map(writer.create(ref(request.getParentRef()), request.getName(), request.getType(),
-                request.getPropertiesMap(), values(request.getPropertyValuesMap()), request.getAspectsList(),
-                request.hasContent() ? request.getContent() : null)));
+        write(observer, () -> mapper.map(writer.create(ref(request.getParentRef()), request.getName(), request.getType(), request.getPropertiesMap(), values(request.getPropertyValuesMap()), request.getAspectsList(), request.hasContent() ? request.getContent() : null)));
     }
 
     @Override public void updateNode(UpdateNodeRequest request, StreamObserver<Node> observer) {
-        write(observer, () -> mapper.map(writer.update(ref(request.getNodeRef()), request.getName(), request.getType(),
-                request.getPropertiesMap(), values(request.getPropertyValuesMap()),
-                request.getAddAspectsList(), request.getRemoveAspectsList())));
+        write(observer, () -> mapper.map(writer.update(ref(request.getNodeRef()), request.getName(), request.getType(), request.getPropertiesMap(), values(request.getPropertyValuesMap()), request.getAddAspectsList(), request.getRemoveAspectsList())));
     }
 
     @Override public void moveNode(MoveNodeRequest request, StreamObserver<Node> observer) {
@@ -109,25 +109,31 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
     }
 
     @Override public void deleteNode(DeleteNodeRequest request, StreamObserver<DeleteNodeResponse> observer) {
-        write(observer, () -> { writer.delete(ref(request.getNodeRef())); return DeleteNodeResponse.getDefaultInstance(); });
+        write(observer, () -> {
+            writer.delete(ref(request.getNodeRef()));
+            return DeleteNodeResponse.getDefaultInstance();
+        });
     }
 
-    /** The property_values of a request as name -> list of text values. */
+    /**
+     * The property_values of a request as name -> list of text values.
+     */
     private static Map<String, List<String>> values(Map<String, PropertyValues> input) {
         val result = new HashMap<String, List<String>>();
         input.forEach((name, values) -> result.put(name, values.getValuesList()));
         return result;
     }
 
-    /** Node aliases accepted in place of a nodeRef, as in the Alfresco REST API. Resolved as the calling user. */
-    static final Map<String, String> ALIASES = Map.of(
-            "-root-", CompanyHomeNodeLocator.NAME,
-            "-my-", UserHomeNodeLocator.NAME,
-            "-shared-", SharedHomeNodeLocator.NAME);
+    /**
+     * Node aliases accepted in place of a nodeRef, as in the Alfresco REST API. Resolved as the calling user.
+     */
+    static final Map<String, String> ALIASES = Map.of("-root-", CompanyHomeNodeLocator.NAME, "-my-", UserHomeNodeLocator.NAME, "-shared-", SharedHomeNodeLocator.NAME);
     private static final Pattern NODE_ID = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.-]{0,99}");
     private static final String USAGE = "node_ref must be a nodeRef (workspace://SpacesStore/<id>), a node id or one of the aliases -root-, -my-, -shared-";
 
-    /** Accepts a full nodeRef, a bare node id (workspace://SpacesStore) or an alias. Must run inside the transaction. */
+    /**
+     * Accepts a full nodeRef, a bare node id (workspace://SpacesStore) or an alias. Must run inside the transaction.
+     */
     private NodeRef ref(String value) {
         if (value == null || value.isBlank())
             throw new IllegalArgumentException(USAGE);
@@ -159,28 +165,34 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
         execute(observer, () -> {
             val response = ListVersionsResponse.newBuilder();
             val history = services.getVersionService().getVersionHistory(ref(request.getNodeRef()));
-            if (history != null) for (val version : history.getAllVersions()) response.addVersions(version(version));
+            if (history != null)
+                for (val version : history.getAllVersions()) response.addVersions(version(version));
             return response.build();
         });
     }
 
     private VersionInfo version(Version version) {
         val frozen = version.getFrozenStateNodeRef();
-        val info = VersionInfo.newBuilder().setLabel(version.getVersionLabel()).setVersionRef(frozen.toString())
-                .setMajor(version.getVersionType() == VersionType.MAJOR)
-                .setNode(mapper.mapVersion(frozen));
-        if (version.getDescription() != null) info.setDescription(version.getDescription());
-        if (version.getFrozenModifiedDate() != null) info.setModifiedMillis(version.getFrozenModifiedDate().getTime());
-        if (version.getFrozenModifier() != null) info.setModifier(version.getFrozenModifier());
+        val info = VersionInfo.newBuilder().setLabel(version.getVersionLabel()).setVersionRef(frozen.toString()).setMajor(version.getVersionType() == VersionType.MAJOR).setNode(mapper.mapVersion(frozen));
+        if (version.getDescription() != null)
+            info.setDescription(version.getDescription());
+        if (version.getFrozenModifiedDate() != null)
+            info.setModifiedMillis(version.getFrozenModifiedDate().getTime());
+        if (version.getFrozenModifier() != null)
+            info.setModifier(version.getFrozenModifier());
         return info.build();
     }
 
     // Content and streaming
 
-    /** Largest content UploadContent accepts, in bytes: larger uploads are refused with INVALID_ARGUMENT. */
+    /**
+     * Largest content UploadContent accepts, in bytes: larger uploads are refused with INVALID_ARGUMENT.
+     */
     static final long MAX_UPLOAD_BYTES = 2L * 1024 * 1024 * 1024;
 
-    /** Largest data message DownloadContent sends. */
+    /**
+     * Largest data message DownloadContent sends.
+     */
     static final int DOWNLOAD_CHUNK_SIZE = 1024 * 1024;
 
     @Override public void getContent(GetContentRequest request, StreamObserver<GetContentResponse> observer) {
@@ -191,10 +203,15 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
         write(observer, () -> mapper.map(writer.updateContent(ref(request.getNodeRef()), request.hasContent() ? request.getContent() : null)));
     }
 
-    /** Streams the stored bytes of a document: one info message, then data messages of at most DOWNLOAD_CHUNK_SIZE. */
+    /**
+     * Streams the stored bytes of a document: one info message, then data messages of at most DOWNLOAD_CHUNK_SIZE.
+     */
     @Override public void downloadContent(DownloadContentRequest request, StreamObserver<DownloadContentResponse> observer) {
         val user = TicketInterceptor.USER.get();
-        if (user == null) { observer.onError(Status.UNAUTHENTICATED.asRuntimeException()); return; }
+        if (user == null) {
+            observer.onError(Status.UNAUTHENTICATED.asRuntimeException());
+            return;
+        }
         ContentFetcher.ContentStream content;
         try {
             // Only the lookup is transactional: the bytes are streamed after it, so a retry cannot duplicate output.
@@ -212,8 +229,7 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
             if (content.reader != null) {
                 try (val in = content.reader.getContentInputStream()) {
                     val buffer = new byte[DOWNLOAD_CHUNK_SIZE];
-                    for (int n = in.read(buffer); n != -1; n = in.read(buffer))
-                        observer.onNext(DownloadContentResponse.newBuilder().setData(ByteString.copyFrom(buffer, 0, n)).build());
+                    for (int n = in.read(buffer); n != -1; n = in.read(buffer)) observer.onNext(DownloadContentResponse.newBuilder().setData(ByteString.copyFrom(buffer, 0, n)).build());
                 }
             }
             observer.onCompleted();
@@ -227,20 +243,30 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
         }
     }
 
-    /** Creates a document from a stream of messages: the header first, then the data chunks. */
+    /**
+     * Creates a document from a stream of messages: the header first, then the data chunks.
+     */
     @Override public StreamObserver<UploadContentRequest> uploadContent(StreamObserver<Node> observer) {
         return upload(observer, MAX_UPLOAD_BYTES);
     }
 
-    /** @param maxBytes largest accepted content: MAX_UPLOAD_BYTES, lower in tests */
+    /**
+     * @param maxBytes largest accepted content: MAX_UPLOAD_BYTES, lower in tests
+     */
     StreamObserver<UploadContentRequest> upload(StreamObserver<Node> observer, long maxBytes) {
         val user = TicketInterceptor.USER.get();
         if (user == null) {
             observer.onError(Status.UNAUTHENTICATED.asRuntimeException());
             return new StreamObserver<>() {
-                @Override public void onNext(UploadContentRequest value) { }
-                @Override public void onError(Throwable t) { }
-                @Override public void onCompleted() { }
+
+                @Override public void onNext(UploadContentRequest value) {
+                }
+
+                @Override public void onError(Throwable t) {
+                }
+
+                @Override public void onCompleted() {
+                }
             };
         }
         return new Upload(observer, user, maxBytes);
@@ -252,21 +278,31 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
      */
     @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
     private final class Upload implements StreamObserver<UploadContentRequest> {
+
         private final StreamObserver<Node> observer;
+
         private final String user;
+
         private final long maxBytes;
+
         private CreateDocumentHeader header;
+
         private Path file;
+
         private OutputStream out;
+
         private long size;
+
         private boolean done;
 
         @Override public void onNext(UploadContentRequest request) {
-            if (done) return;
+            if (done)
+                return;
             try {
                 if (header == null) {
                     if (request.getPartCase() != UploadContentRequest.PartCase.HEADER) {
-                        fail(Status.INVALID_ARGUMENT.withDescription("The first message must be the header")); return;
+                        fail(Status.INVALID_ARGUMENT.withDescription("The first message must be the header"));
+                        return;
                     }
                     header = request.getHeader();
                     file = Files.createTempFile("alfresco-upload-", ".tmp");
@@ -277,7 +313,8 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
                     fail(Status.INVALID_ARGUMENT.withDescription("Empty message: send data chunks after the header"));
                 } else {
                     if (request.getData().size() > maxBytes - size) {
-                        fail(Status.INVALID_ARGUMENT.withDescription(String.format("Content exceeds %d bytes", maxBytes))); return;
+                        fail(Status.INVALID_ARGUMENT.withDescription(String.format("Content exceeds %d bytes", maxBytes)));
+                        return;
                     }
                     size += request.getData().size();
                     request.getData().writeTo(out);
@@ -289,18 +326,19 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
         }
 
         @Override public void onCompleted() {
-            if (done) return;
-            if (header == null) { fail(Status.INVALID_ARGUMENT.withDescription("The header is required")); return; }
+            if (done)
+                return;
+            if (header == null) {
+                fail(Status.INVALID_ARGUMENT.withDescription("The header is required"));
+                return;
+            }
             done = true;
             val spool = file;
             Status failure = null;
             Node node = null;
             try {
                 out.close();
-                node = transact(user, false, () -> mapper.map(writer.createDocument(ref(header.getParentRef()),
-                        header.getName(), header.getType(), header.getPropertiesMap(),
-                        values(header.getPropertyValuesMap()), header.getAspectsList(),
-                        header.getMimetype(), header.getEncoding(), spool)));
+                node = transact(user, false, () -> mapper.map(writer.createDocument(ref(header.getParentRef()), header.getName(), header.getType(), header.getPropertiesMap(), values(header.getPropertyValuesMap()), header.getAspectsList(), header.getMimetype(), header.getEncoding(), spool)));
             } catch (IOException e) {
                 log.error("Cannot close the upload spool", e);
                 failure = Status.INTERNAL.withDescription("Upload failed");
@@ -309,13 +347,18 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
             } finally {
                 cleanup();
             }
-            if (failure != null) observer.onError(failure.asRuntimeException());
-            else { observer.onNext(node); observer.onCompleted(); }
+            if (failure != null)
+                observer.onError(failure.asRuntimeException());
+            else {
+                observer.onNext(node);
+                observer.onCompleted();
+            }
         }
 
         @Override public void onError(Throwable t) {
             // Cancelled or broken by the client: nothing to report back.
-            if (done) return;
+            if (done)
+                return;
             done = true;
             log.debug("Upload ended by the client", t);
             cleanup();
@@ -327,17 +370,21 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
             observer.onError(status.asRuntimeException());
         }
 
-        /** Closes and deletes the spool file. Idempotent. */
+        /**
+         * Closes and deletes the spool file. Idempotent.
+         */
         private void cleanup() {
             try {
-                if (out != null) out.close();
+                if (out != null)
+                    out.close();
             } catch (IOException e) {
                 log.debug("Cannot close the upload spool", e);
             } finally {
                 out = null;
             }
             try {
-                if (file != null) Files.deleteIfExists(file);
+                if (file != null)
+                    Files.deleteIfExists(file);
             } catch (IOException e) {
                 log.warn("Cannot delete the upload spool {}", file, e);
             } finally {
@@ -348,10 +395,10 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
 
     // Search
 
-    /** Accepted values of SearchRequest.language. */
-    static final Map<String, String> LANGUAGES = Map.of(
-            "afts", SearchService.LANGUAGE_FTS_ALFRESCO,
-            "cmis", SearchService.LANGUAGE_CMIS_ALFRESCO);
+    /**
+     * Accepted values of SearchRequest.language.
+     */
+    static final Map<String, String> LANGUAGES = Map.of("afts", SearchService.LANGUAGE_FTS_ALFRESCO, "cmis", SearchService.LANGUAGE_CMIS_ALFRESCO);
     static final int MAX_QUERY_LENGTH = 4096;
 
     @Override public void search(SearchRequest request, StreamObserver<SearchResponse> observer) {
@@ -381,8 +428,8 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
             try {
                 val response = SearchResponse.newBuilder().setHasMoreItems(results.hasMore()).setTotalItems(results.getNumberFound());
                 // The index can lag behind the repository: skip nodes deleted since they were indexed.
-                for (val ref : results.getNodeRefs())
-                    if (services.getNodeService().exists(ref)) response.addEntries(mapper.map(ref));
+                for (val ref : results.getNodeRefs()) if (services.getNodeService().exists(ref))
+                    response.addEntries(mapper.map(ref));
                 return response.build();
             } finally {
                 results.close();
@@ -392,9 +439,12 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
 
     static final int MAX_SORT_FIELDS = 10;
 
-    /** Adds the sort criteria of SearchRequest.sort: properties must exist in the dictionary, "score" is the relevance. */
+    /**
+     * Adds the sort criteria of SearchRequest.sort: properties must exist in the dictionary, "score" is the relevance.
+     */
     private void sort(SearchParameters parameters, String languageName, List<SortField> sort) {
-        if (sort.isEmpty()) return;
+        if (sort.isEmpty())
+            return;
         if (!"afts".equals(languageName))
             throw new IllegalArgumentException("sort is supported for afts only: use ORDER BY in a cmis query");
         if (sort.size() > MAX_SORT_FIELDS)
@@ -442,7 +492,10 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
 
     private <T> void run(StreamObserver<T> observer, boolean readOnly, Supplier<T> work) {
         val user = TicketInterceptor.USER.get();
-        if (user == null) { observer.onError(Status.UNAUTHENTICATED.asRuntimeException()); return; }
+        if (user == null) {
+            observer.onError(Status.UNAUTHENTICATED.asRuntimeException());
+            return;
+        }
         T result;
         try {
             result = transact(user, readOnly, work);
@@ -451,14 +504,16 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
             return;
         }
         // Never emit a response inside a transaction that Alfresco may retry.
-        observer.onNext(result); observer.onCompleted();
+        observer.onNext(result);
+        observer.onCompleted();
     }
 
-    /** Runs the work in a transaction as the user. Failures are thrown as the gRPC status to report. */
+    /**
+     * Runs the work in a transaction as the user. Failures are thrown as the gRPC status to report.
+     */
     private <T> T transact(String user, boolean readOnly, Supplier<T> work) {
         try {
-            return AuthenticationUtil.runAs(() -> services.getTransactionService().getRetryingTransactionHelper()
-                    .doInTransaction(work::get, readOnly), user);
+            return AuthenticationUtil.runAs(() -> services.getTransactionService().getRetryingTransactionHelper().doInTransaction(work::get, readOnly), user);
         } catch (AccessDeniedException e) {
             throw Status.PERMISSION_DENIED.asRuntimeException();
         } catch (InvalidNodeRefException e) {

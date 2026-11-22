@@ -9,7 +9,9 @@ import lombok.val;
 import java.io.File;
 import java.io.IOException;
 
-/** Creates channels to the protoalf-platform module. */
+/**
+ * Creates channels to the protoalf-platform module.
+ */
 public final class AlfrescoGrpcChannels {
 
     private AlfrescoGrpcChannels() {
@@ -23,15 +25,16 @@ public final class AlfrescoGrpcChannels {
      * @param authorityOverride TLS host name to verify instead of {@code host}; null or blank to use {@code host}
      */
     public static ManagedChannel create(String host, int port, String trustCertificate, String authorityOverride) throws IOException {
-        val credentials = isBlank(trustCertificate)
-                ? InsecureChannelCredentials.create()
-                : TlsChannelCredentials.newBuilder().trustManager(new File(trustCertificate)).build();
+        val credentials = isBlank(trustCertificate) ? InsecureChannelCredentials.create() : TlsChannelCredentials.newBuilder().trustManager(new File(trustCertificate)).build();
         val builder = Grpc.newChannelBuilderForAddress(host, port, credentials);
-        if (!isBlank(authorityOverride)) builder.overrideAuthority(authorityOverride);
+        if (!isBlank(authorityOverride))
+            builder.overrideAuthority(authorityOverride);
         return builder.build();
     }
 
-    /** A plaintext channel: only for an Alfresco module listening on a loopback address. */
+    /**
+     * A plaintext channel: only for an Alfresco module listening on a loopback address.
+     */
     public static ManagedChannel plaintext(String host, int port) throws IOException {
         return create(host, port, null, null);
     }
