@@ -34,7 +34,7 @@ COMPOSE_CMD+=(-f "$PWD/docker/docker-compose.yml")
 MVN_EXEC=${M2_HOME:+${M2_HOME}/bin/}mvn
 
 build() {
-    # Include the shared client; the standalone example is not part of the stack.
+    # Include the shared client and exporter; examples are not part of the stack.
     "$MVN_EXEC" clean package -pl protoalf-platform,protoalf-mcp -am
     "${COMPOSE_CMD[@]}" build acs mcp
 }

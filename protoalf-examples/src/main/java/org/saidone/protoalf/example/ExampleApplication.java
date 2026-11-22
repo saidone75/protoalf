@@ -6,7 +6,8 @@ import org.saidone.protoalf.api.Node;
 import org.saidone.protoalf.api.SortField;
 import org.saidone.protoalf.client.AlfrescoGrpcChannels;
 import org.saidone.protoalf.client.AuthenticationServiceClient;
-import org.saidone.protoalf.client.NodeServiceClient;
+import org.saidone.protoalf.client.FileFolderServiceClient;
+import org.saidone.protoalf.client.SearchServiceClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
@@ -16,8 +17,8 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * PoC of protoalf-client, gRPC only: logs in through AuthenticationService, lists the children of
- * Company Home (-root-), then the 10 documents modified most recently, and exits.
+ * PoC of protoalf-client, gRPC only: logs in through AuthenticationService, lists the children of Company Home
+ * (-root-), then the 10 documents modified most recently, and exits.
  */
 @SpringBootApplication
 public class ExampleApplication implements CommandLineRunner {
@@ -48,12 +49,13 @@ public class ExampleApplication implements CommandLineRunner {
         try {
             // Logs in on the first call, and again if the ticket expires
             val tickets = new AuthenticationServiceClient(channel, username, password, DEADLINE);
-            val client = new NodeServiceClient(channel, tickets, DEADLINE);
+            val files = new FileFolderServiceClient(channel, tickets, DEADLINE);
+            val search = new SearchServiceClient(channel, tickets, DEADLINE);
             System.out.println("Company Home:");
-            client.listChildren("-root-", 0, 100).getEntriesList().forEach(ExampleApplication::print);
+            files.list("-root-", 0, 100).getEntriesList().forEach(ExampleApplication::print);
             System.out.println("Last modified documents:");
             val newestFirst = List.of(SortField.newBuilder().setField("cm:modified").setDescending(true).build());
-            client.search("TYPE:\"cm:content\"", "afts", 0, 10, newestFirst).getEntriesList().forEach(ExampleApplication::print);
+            search.query("TYPE:\"cm:content\"", "afts", 0, 10, newestFirst).getEntriesList().forEach(ExampleApplication::print);
         } finally {
             channel.shutdownNow();
         }

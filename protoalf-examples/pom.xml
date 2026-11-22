@@ -6,10 +6,10 @@
         <groupId>org.saidone</groupId>
         <artifactId>protoalf</artifactId>
         <version>1.0-SNAPSHOT</version>
-        <relativePath>../../pom.xml</relativePath>
+        <relativePath>../pom.xml</relativePath>
     </parent>
-    <artifactId>protoalf-example</artifactId>
-    <name>protoalf-example</name>
+    <artifactId>protoalf-examples</artifactId>
+    <name>protoalf-examples</name>
     <description>Minimal Spring Boot application using protoalf-client: lists the children of Company Home</description>
 
     <properties>

@@ -1,17 +1,25 @@
-package org.saidone.protoalf.client;
+package org.saidone.protoalf.bulkexporter;
 
+import io.grpc.Channel;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.val;
 import org.saidone.protoalf.api.Node;
 import org.saidone.protoalf.api.Property;
 import org.saidone.protoalf.api.PropertyValue;
+import org.saidone.protoalf.client.ContentServiceClient;
+import org.saidone.protoalf.client.DictionaryServiceClient;
+import org.saidone.protoalf.client.FileFolderServiceClient;
+import org.saidone.protoalf.client.NodeServiceClient;
+import org.saidone.protoalf.client.TicketProvider;
+import org.saidone.protoalf.client.VersionServiceClient;
 
 import java.io.IOException;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -56,20 +64,33 @@ public class BulkExporter {
     private static final Set<String> EXCLUDED_ASPECTS = Set.of(qname(CM, "lockable"), qname(CM, "workingcopy"), qname(CM, "checkedOut"), qname(CM, "thumbnailModification"), qname("http://www.alfresco.org/model/rendition/1.0", "renditioned"));
     private static final int PAGE_SIZE = 100;
     private static final int MAX_TYPE_DEPTH = 100;
-    private final NodeServiceClient client;
+    private final NodeServiceClient nodes;
+    private final FileFolderServiceClient files;
+    private final ContentServiceClient contents;
+    private final VersionServiceClient versions;
+    private final DictionaryServiceClient models;
+
+    /** Creates the standalone exporter with one shared channel, ticket provider and export deadline. */
+    public BulkExporter(Channel channel, TicketProvider tickets, Duration deadline) {
+        this(new NodeServiceClient(channel, tickets, deadline), new FileFolderServiceClient(channel, tickets, deadline),
+                new ContentServiceClient(channel, tickets, deadline), new VersionServiceClient(channel, tickets, deadline),
+                new DictionaryServiceClient(channel, tickets, deadline));
+    }
 
     /**
-     * Exports the children of {@code folderRef} into {@code target}, which is created if missing and must be empty.
+     * Exports the children of {@code folderRef} into {@code target}, which is created if missing and must be
+     * empty.
      *
-     * @param recursive true to export subfolders and their content too, false for the documents of the folder only
+     * @param recursive true to export subfolders and their content too, false for the documents of the folder
+     *     only
      * @param progress  updated while the export runs: another thread can read it
      * @return {@code progress}, completed
      * @throws IllegalArgumentException if {@code folderRef} is not a folder or {@code target} is not empty
      */
     public Progress export(String folderRef, Path target, boolean recursive, Progress progress) throws IOException {
         try {
-            val dictionary = Dictionary.load(client);
-            val folder = client.getNode(folderRef);
+            val dictionary = Dictionary.load(models);
+            val folder = nodes.getNode(folderRef);
             if (!dictionary.isFolder(folder.getType()))
                 throw new IllegalArgumentException("%s is not a folder".formatted(folderRef));
             Files.createDirectories(target);
@@ -99,7 +120,7 @@ public class BulkExporter {
         void children(Node folder, Path directory) {
             var skip = 0;
             while (true) {
-                val page = client.listChildren(folder.getNodeRef(), skip, PAGE_SIZE);
+                val page = files.list(folder.getNodeRef(), skip, PAGE_SIZE);
                 for (val child : page.getEntriesList()) node(child, directory);
                 skip += page.getEntriesCount();
                 if (!page.getHasMoreItems() || page.getEntriesCount() == 0)
@@ -131,7 +152,7 @@ public class BulkExporter {
             if (node.getAspectsList().contains(VERSIONABLE)) {
                 val current = text(node.getPropertiesMap().get(VERSION_LABEL));
                 // Newest first from Alfresco: the importer orders versions by number, so they are numbered oldest first.
-                val previous = new ArrayList<>(client.listVersions(node.getNodeRef()).getVersionsList());
+                val previous = new ArrayList<>(versions.getVersionHistory(node.getNodeRef()).getVersionsList());
                 Collections.reverse(previous);
                 // The file without suffix is the current version: the Bulk Import Tool imports it last.
                 previous.removeIf(version -> version.getLabel().equals(current));
@@ -149,7 +170,7 @@ public class BulkExporter {
 
         private void download(String nodeRef, Path file) throws IOException {
             try (val out = Files.newOutputStream(file)) {
-                client.downloadContent(nodeRef, out);
+                contents.downloadContent(nodeRef, out);
             }
             progress.bytes.addAndGet(Files.size(file));
         }
@@ -239,8 +260,8 @@ public class BulkExporter {
     }
 
     /**
-     * A version of a content or shadow file: {@code .v<number>} last, an integer, as the Alfresco importer expects
-     * ({@code \.v([0-9]+)\z}): {@code a.pdf.v1} and {@code a.pdf.metadata.properties.xml.v1}.
+     * A version of a content or shadow file: {@code .v<number>} last, an integer, as the Alfresco importer
+     * expects ({@code \.v([0-9]+)\z}): {@code a.pdf.v1} and {@code a.pdf.metadata.properties.xml.v1}.
      */
     private static Path versioned(Path path, int number) {
         return path.resolveSibling("%s.v%d".formatted(path.getFileName(), number));
@@ -278,9 +299,9 @@ public class BulkExporter {
 
         private final Map<String, String> parents = new HashMap<>();
 
-        static Dictionary load(NodeServiceClient client) {
+        static Dictionary load(DictionaryServiceClient client) {
             val dictionary = new Dictionary();
-            for (val model : client.listModels("", false).getModelsList()) {
+            for (val model : client.getAllModels().getModelsList()) {
                 for (val namespace : model.getNamespacesList()) dictionary.prefixes.put(namespace.getUri(), namespace.getPrefix());
                 for (val type : model.getTypesList()) dictionary.parents.put(type.getName(), type.getParent());
             }

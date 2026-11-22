@@ -1,338 +1,222 @@
 package org.saidone.protoalf.client;
 
-import com.google.protobuf.ByteString;
 import io.grpc.*;
-import io.grpc.stub.AbstractBlockingStub;
-import io.grpc.stub.ClientCallStreamObserver;
-import io.grpc.stub.ClientResponseObserver;
-import io.grpc.stub.MetadataUtils;
-import lombok.AccessLevel;
-import lombok.RequiredArgsConstructor;
 import lombok.val;
 import org.saidone.protoalf.api.*;
 import org.saidone.protoalf.api.NodeServiceGrpc.NodeServiceBlockingStub;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Function;
-import java.util.stream.Collectors;
+import java.util.Set;
 
 /**
- * Thin wrapper around the generated gRPC stub: attaches the Alfresco ticket to every call
- * and retries once with a fresh ticket when the server answers UNAUTHENTICATED (expired ticket).
- * Failures surface as {@link StatusRuntimeException} with the gRPC status of the module
- * (NOT_FOUND, PERMISSION_DENIED, ALREADY_EXISTS, INVALID_ARGUMENT, FAILED_PRECONDITION, ...).
+ * Client of the platform's node service for properties, types, aspects and node snapshots. File/folder
+ * operations, content, search, versions and model lookups have dedicated clients.
  *
- * <pre>{@code
- * ManagedChannel channel = AlfrescoGrpcChannels.create("localhost", 9090, "ca.crt", null);
- * val tickets = new AuthenticationServiceClient(channel, "admin", "admin", Duration.ofSeconds(30));
- * val client = new NodeServiceClient(channel, tickets, Duration.ofSeconds(30));
- * Node home = client.getNode("-my-");
- * }</pre>
+ * <p>Each call sends the shared provider's Alfresco ticket and a per-call deadline. Unary calls retry once
+ * after UNAUTHENTICATED if the provider supplies a different ticket. The caller owns the channel and should
+ * share one TicketProvider across service clients.
  */
-@RequiredArgsConstructor(access = AccessLevel.PRIVATE)
 public class NodeServiceClient {
 
-    /**
-     * gRPC header carrying the Alfresco ticket.
-     */
-    public static final Metadata.Key<String> TICKET_HEADER = Metadata.Key.of("alfresco-ticket", Metadata.ASCII_STRING_MARSHALLER);
-
-    /**
-     * Chunk size of UploadContent messages.
-     */
-    private static final int UPLOAD_CHUNK_SIZE = 1024 * 1024;
-    private final Channel channel;
     private final NodeServiceBlockingStub stub;
-    private final TicketProvider tickets;
-    private final Duration deadline;
+    private final ClientCallSupport support;
 
     /**
-     * @param deadline per-call deadline
+     * Creates this service client with shared authentication and a per-call deadline.
+     *
+     * <p>The caller retains ownership of the channel; closing an application should close its shared channel
+     * once.
+     *
+     * @param channel shared gRPC channel; ownership remains with the caller
+     * @param tickets shared ticket provider, normally one AuthenticationServiceClient
+     * @param deadline per-call deadline applied to every RPC attempt
      */
     public NodeServiceClient(Channel channel, TicketProvider tickets, Duration deadline) {
-        this(channel, NodeServiceGrpc.newBlockingStub(channel), tickets, deadline);
+        this(NodeServiceGrpc.newBlockingStub(channel), tickets, deadline);
     }
 
+    /**
+     * Creates this service client with shared authentication and a per-call deadline.
+     *
+     * <p>The caller retains ownership of the channel; closing an application should close its shared channel
+     * once.
+     *
+     * @param stub preconfigured stub for this repository service
+     * @param tickets shared ticket provider, normally one AuthenticationServiceClient
+     * @param deadline per-call deadline applied to every RPC attempt
+     */
     public NodeServiceClient(NodeServiceBlockingStub stub, TicketProvider tickets, Duration deadline) {
-        this(stub.getChannel(), stub, tickets, deadline);
+        this.stub = stub;
+        this.support = new ClientCallSupport(tickets, deadline);
     }
 
+    /**
+     * Reads the typed property map using qualified property names as keys.
+     *
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
+     * @return the read-only typed property map, keyed by expanded qualified names
+     */
+    public Map<String, Property> getProperties(String nodeRef) {
+        return support.call(stub, service -> service.getProperties(nodeRef(nodeRef)).getPropertiesMap());
+    }
+
+    /**
+     * Merges scalar properties; unrelated metadata remains unchanged.
+     *
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
+     * @param properties scalar text properties keyed by qualified name
+     * @return the resulting node snapshot
+     */
+    public Node addProperties(String nodeRef, Map<String, String> properties) {
+        return addProperties(nodeRef, properties, Map.of());
+    }
+
+    /**
+     * Merges scalar and explicit-list properties; names must not occur in both maps.
+     *
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
+     * @param properties scalar text properties keyed by qualified name
+     * @param propertyValues ordered property value lists; names must not also occur in properties
+     * @return the resulting node snapshot
+     */
+    public Node addProperties(String nodeRef, Map<String, String> properties, Map<String, List<String>> propertyValues) {
+        val request = AddPropertiesRequest.newBuilder().setNodeRef(nodeRef).putAllProperties(properties).putAllPropertyValues(ClientCallSupport.toPropertyValues(propertyValues)).build();
+        return support.call(stub, service -> service.addProperties(request));
+    }
+
+    /**
+     * Returns the node's expanded qualified type name.
+     *
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
+     * @return the expanded qualified type name
+     */
+    public String getType(String nodeRef) {
+        return support.call(stub, service -> service.getType(nodeRef(nodeRef)).getType());
+    }
+
+    /**
+     * Changes the type while preserving the document/folder category.
+     *
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
+     * @param type qualified type name; empty preserves the type on update and defaults to cm:content on create
+     * @return the resulting node snapshot
+     */
+    public Node setType(String nodeRef, String type) {
+        val request = SetTypeRequest.newBuilder().setNodeRef(nodeRef).setType(type).build();
+        return support.call(stub, service -> service.setType(request));
+    }
+
+    /**
+     * Returns the node's applied aspects as expanded qualified names.
+     *
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
+     * @return the set of applied aspect names
+     */
+    public Set<String> getAspects(String nodeRef) {
+        return support.call(stub, service -> Set.copyOf(service.getAspects(nodeRef(nodeRef)).getAspectsList()));
+    }
+
+    /**
+     * Adds a known aspect and optional scalar properties.
+     *
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
+     * @param aspect qualified name of the aspect to add or remove
+     * @param properties scalar text properties keyed by qualified name
+     * @return the resulting node snapshot
+     */
+    public Node addAspect(String nodeRef, String aspect, Map<String, String> properties) {
+        return addAspect(nodeRef, aspect, properties, Map.of());
+    }
+
+    /**
+     * Adds an aspect and merges scalar/list-valued properties atomically.
+     *
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
+     * @param aspect qualified name of the aspect to add or remove
+     * @param properties scalar text properties keyed by qualified name
+     * @param propertyValues ordered property value lists; names must not also occur in properties
+     * @return the resulting node snapshot
+     */
+    public Node addAspect(String nodeRef, String aspect, Map<String, String> properties, Map<String, List<String>> propertyValues) {
+        val request = AddAspectRequest.newBuilder().setNodeRef(nodeRef).setAspect(aspect).putAllProperties(properties).putAllPropertyValues(ClientCallSupport.toPropertyValues(propertyValues)).build();
+        return support.call(stub, service -> service.addAspect(request));
+    }
+
+    /**
+     * Removes a known aspect if present.
+     *
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
+     * @param aspect qualified name of the aspect to add or remove
+     * @return the resulting node snapshot
+     */
+    public Node removeAspect(String nodeRef, String aspect) {
+        val request = RemoveAspectRequest.newBuilder().setNodeRef(nodeRef).setAspect(aspect).build();
+        return support.call(stub, service -> service.removeAspect(request));
+    }
+
+    /**
+     * Reads a complete node snapshot, including a readable primary parent.
+     *
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
+     * @return the resulting node snapshot
+     */
     public Node getNode(String nodeRef) {
-        return call(s -> s.getNode(GetNodeRequest.newBuilder().setNodeRef(nodeRef).build()));
-    }
-
-    public ListChildrenResponse listChildren(String nodeRef, int skipCount, int maxItems) {
-        return call(FileFolderServiceGrpc.newBlockingStub(channel), s -> s.list(ListChildrenRequest.newBuilder().setNodeRef(nodeRef).setSkipCount(skipCount).setMaxItems(maxItems).build()));
+        return support.call(stub, s -> s.getNode(GetNodeRequest.newBuilder().setNodeRef(nodeRef).build()));
     }
 
     /**
-     * @param content null to create a folder or an empty document
+     * Atomically updates the supplied name, type, properties and aspect changes.
+     *
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
+     * @param name node name; empty preserves the name on update, move or copy
+     * @param properties scalar text properties keyed by qualified name
+     * @return the resulting node snapshot
      */
-    public Node createNode(String parentRef, String name, String type, Map<String, String> properties, Content content) {
-        return createNode(parentRef, name, type, properties, Map.of(), List.of(), content);
-    }
-
-    /**
-     * @param properties     one text value per property
-     * @param propertyValues values per property: several for a multi-valued property, empty to unset it.
-     *                       A property must not appear in both maps
-     * @param aspects        aspects added before the properties are set (already present ones are ignored)
-     * @param content        null to create a folder or an empty document
-     */
-    public Node createNode(String parentRef, String name, String type, Map<String, String> properties, Map<String, List<String>> propertyValues, List<String> aspects, Content content) {
-        val request = CreateNodeRequest.newBuilder().setParentRef(parentRef).setName(name).setType(type).putAllProperties(properties).putAllPropertyValues(toPropertyValues(propertyValues)).addAllAspects(aspects);
-        if (content != null)
-            request.setContent(content);
-        return call(FileFolderServiceGrpc.newBlockingStub(channel), s -> s.create(request.build()));
-    }
-
     public Node updateNode(String nodeRef, String name, Map<String, String> properties) {
         return updateNode(nodeRef, name, "", properties);
     }
 
     /**
-     * @param type new type (e.g. a cm:content subtype), empty to keep the current one
+     * Atomically updates the supplied name, type, properties and aspect changes.
+     *
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
+     * @param name node name; empty preserves the name on update, move or copy
+     * @param type qualified type name; empty preserves the type on update and defaults to cm:content on create
+     * @param properties scalar text properties keyed by qualified name
+     * @return the resulting node snapshot
      */
     public Node updateNode(String nodeRef, String name, String type, Map<String, String> properties) {
         return updateNode(nodeRef, name, type, properties, Map.of(), List.of(), List.of());
     }
 
     /**
-     * @param type          new type (e.g. a cm:content subtype), empty to keep the current one
-     * @param propertyValues values per property, see {@link #createNode(String, String, String, Map, Map, List, Content)}
-     * @param addAspects    aspects to add (already present ones are ignored)
-     * @param removeAspects aspects to remove (absent ones are ignored)
+     * Atomically updates the supplied name, type, properties and aspect changes.
+     *
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
+     * @param name node name; empty preserves the name on update, move or copy
+     * @param type qualified type name; empty preserves the type on update and defaults to cm:content on create
+     * @param properties scalar text properties keyed by qualified name
+     * @param propertyValues ordered property value lists; names must not also occur in properties
+     * @param addAspects qualified aspect names to add if absent
+     * @param removeAspects qualified aspect names to remove if present
+     * @return the resulting node snapshot
      */
     public Node updateNode(String nodeRef, String name, String type, Map<String, String> properties, Map<String, List<String>> propertyValues, List<String> addAspects, List<String> removeAspects) {
-        return call(s -> s.updateNode(UpdateNodeRequest.newBuilder().setNodeRef(nodeRef).setName(name).setType(type).putAllProperties(properties).putAllPropertyValues(toPropertyValues(propertyValues)).addAllAddAspects(addAspects).addAllRemoveAspects(removeAspects).build()));
-    }
-
-    public Node moveNode(String nodeRef, String targetParentRef, String name) {
-        return call(FileFolderServiceGrpc.newBlockingStub(channel), s -> s.move(MoveNodeRequest.newBuilder().setNodeRef(nodeRef).setTargetParentRef(targetParentRef).setName(name).build()));
-    }
-
-    public Node copyNode(String nodeRef, String targetParentRef, String name) {
-        return call(FileFolderServiceGrpc.newBlockingStub(channel), s -> s.copy(CopyNodeRequest.newBuilder().setNodeRef(nodeRef).setTargetParentRef(targetParentRef).setName(name).build()));
-    }
-
-    public void deleteNode(String nodeRef) {
-        call(s -> s.deleteNode(DeleteNodeRequest.newBuilder().setNodeRef(nodeRef).build()));
-    }
-
-    private static Map<String, PropertyValues> toPropertyValues(Map<String, List<String>> values) {
-        return values.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey, e -> PropertyValues.newBuilder().addAllValues(e.getValue()).build()));
+        return support.call(stub, s -> s.updateNode(UpdateNodeRequest.newBuilder().setNodeRef(nodeRef).setName(name).setType(type).putAllProperties(properties).putAllPropertyValues(ClientCallSupport.toPropertyValues(propertyValues)).addAllAddAspects(addAspects).addAllRemoveAspects(removeAspects).build()));
     }
 
     /**
-     * Version history of a document, newest first; empty when it is not versionable. Pass the version_ref of a version
-     * to {@link #getContent} or {@link #downloadContent} to read that version.
-     */
-    public ListVersionsResponse listVersions(String nodeRef) {
-        return call(VersionServiceGrpc.newBlockingStub(channel), s -> s.getVersionHistory(ListVersionsRequest.newBuilder().setNodeRef(nodeRef).build()));
-    }
-
-    public GetContentResponse getContent(String nodeRef, boolean text, long offset, int maxBytes) {
-        return call(ContentServiceGrpc.newBlockingStub(channel), s -> s.getReader(GetContentRequest.newBuilder().setNodeRef(nodeRef).setText(text).setOffset(offset).setMaxBytes(maxBytes).build()));
-    }
-
-    public Node updateContent(String nodeRef, Content content) {
-        return call(ContentServiceGrpc.newBlockingStub(channel), s -> s.getWriter(UpdateContentRequest.newBuilder().setNodeRef(nodeRef).setContent(content).build()));
-    }
-
-    /**
-     * Streams the stored bytes of a document into {@code out}, which is not closed. The deadline covers the whole
-     * download. On UNAUTHENTICATED the ticket is renewed and the download retried once, but only while nothing has
-     * been written to {@code out} yet; otherwise the {@link StatusRuntimeException} is rethrown.
+     * Deletes a node through the repository, preserving the server's protected-folder checks.
      *
-     * @return the mimetype, encoding and size of the content (size 0 and no bytes for a document without content)
+     * @param nodeRef node reference, bare workspace ID or supported repository alias
      */
-    public ContentInfo downloadContent(String nodeRef, OutputStream out) {
-        val request = DownloadContentRequest.newBuilder().setNodeRef(nodeRef).build();
-        val written = new AtomicLong();
-        val ticket = tickets.ticket();
-        try {
-            return download(authenticated(ContentServiceGrpc.newBlockingStub(channel), ticket), request, out, written);
-        } catch (StatusRuntimeException e) {
-            if (e.getStatus().getCode() != Status.Code.UNAUTHENTICATED || written.get() > 0)
-                throw e;
-            tickets.invalidate(ticket);
-            val renewed = tickets.ticket();
-            if (renewed.equals(ticket))
-                throw e;
-            return download(authenticated(ContentServiceGrpc.newBlockingStub(channel), renewed), request, out, written);
-        }
+    public void deleteNode(String nodeRef) {
+        support.call(stub, s -> s.deleteNode(DeleteNodeRequest.newBuilder().setNodeRef(nodeRef).build()));
     }
 
-    private ContentInfo download(ContentServiceGrpc.ContentServiceBlockingStub s, DownloadContentRequest request, OutputStream out, AtomicLong written) {
-        ContentInfo info = null;
-        val parts = s.downloadContent(request);
-        while (parts.hasNext()) {
-            val part = parts.next();
-            switch(part.getPartCase()) {
-                case INFO ->
-                    info = part.getInfo();
-                case DATA ->
-                    {
-                        val data = part.getData();
-                        written.addAndGet(data.size());
-                        try {
-                            data.writeTo(out);
-                        } catch (IOException e) {
-                            throw new UncheckedIOException("Cannot write the downloaded content", e);
-                        }
-                    }
-                default ->
-                    {
-                    }
-            }
-        }
-        if (info == null)
-            throw new IllegalStateException("The server sent no content info");
-        return info;
-    }
-
-    /**
-     * Creates a document: the header first, then the bytes of {@code data} in chunks of at most 1 MB. Returns the
-     * created node. The stream is read but not closed.
-     * <p>
-     * The deadline covers the whole upload, so it must be generous for large files. An UNAUTHENTICATED answer drops
-     * the ticket (the next call logs in again) and rethrows the {@link StatusRuntimeException}: this method is never
-     * retried, because the input stream cannot be rewound. Open the stream again and call it again.
-     */
-    public Node uploadContent(CreateDocumentHeader header, InputStream data) {
-        val ticket = tickets.ticket();
-        val upload = new Upload();
-        val sender = ContentServiceGrpc.newStub(channel).withInterceptors(ticketHeader(ticket)).withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS).uploadContent(upload);
-        try {
-            sender.onNext(UploadContentRequest.newBuilder().setHeader(header).build());
-            val buffer = new byte[UPLOAD_CHUNK_SIZE];
-            for (int n = data.read(buffer); n != -1 && !upload.response.isDone(); n = data.read(buffer)) {
-                upload.awaitReady();
-                if (upload.response.isDone())
-                    break;
-                sender.onNext(UploadContentRequest.newBuilder().setData(ByteString.copyFrom(buffer, 0, n)).build());
-            }
-            sender.onCompleted();
-        } catch (IOException e) {
-            sender.onError(Status.CANCELLED.withDescription("Cannot read the content to upload").withCause(e).asRuntimeException());
-            throw new UncheckedIOException("Cannot read the content to upload", e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            sender.onError(Status.CANCELLED.withDescription("Upload interrupted").withCause(e).asRuntimeException());
-            throw new IllegalStateException("Interrupted while uploading", e);
-        }
-        try {
-            return upload.response.get();
-        } catch (ExecutionException e) {
-            if (e.getCause() instanceof StatusRuntimeException status) {
-                if (status.getStatus().getCode() == Status.Code.UNAUTHENTICATED)
-                    tickets.invalidate(ticket);
-                throw status;
-            }
-            throw new IllegalStateException("Upload failed", e.getCause());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            sender.onError(Status.CANCELLED.withDescription("Upload interrupted").withCause(e).asRuntimeException());
-            throw new IllegalStateException("Interrupted while uploading", e);
-        }
-    }
-
-    /**
-     * Receives the response of an upload and tells when the call accepts more messages (flow control).
-     */
-    private static final class Upload implements ClientResponseObserver<UploadContentRequest, Node> {
-
-        final CompletableFuture<Node> response = new CompletableFuture<>();
-
-        private final Object ready = new Object();
-
-        private ClientCallStreamObserver<UploadContentRequest> requests;
-
-        @Override public void beforeStart(ClientCallStreamObserver<UploadContentRequest> requests) {
-            this.requests = requests;
-            requests.setOnReadyHandler(this::wake);
-        }
-
-        @Override public void onNext(Node value) {
-            response.complete(value);
-        }
-
-        @Override public void onError(Throwable t) {
-            response.completeExceptionally(t);
-            wake();
-        }
-
-        @Override public void onCompleted() {
-            wake();
-        }
-
-        /**
-         * Waits until the call is ready for another message, or has ended.
-         */
-        void awaitReady() throws InterruptedException {
-            synchronized (ready) {
-                while (!requests.isReady() && !response.isDone()) ready.wait(100);
-            }
-        }
-
-        private void wake() {
-            synchronized (ready) {
-                ready.notifyAll();
-            }
-        }
-    }
-
-    public SearchResponse search(String query, String language, int skipCount, int maxItems) {
-        return search(query, language, skipCount, maxItems, List.of());
-    }
-
-    /**
-     * @param sort sort criteria, applied in order (afts only); empty to sort by relevance
-     */
-    public SearchResponse search(String query, String language, int skipCount, int maxItems, List<SortField> sort) {
-        return call(SearchServiceGrpc.newBlockingStub(channel), s -> s.query(SearchRequest.newBuilder().setQuery(query).setLanguage(language).setSkipCount(skipCount).setMaxItems(maxItems).addAllSort(sort).build()));
-    }
-
-    public ListModelsResponse listModels(String model, boolean includeProperties) {
-        return call(DictionaryServiceGrpc.newBlockingStub(channel), s -> s.getAllModels(ListModelsRequest.newBuilder().setModel(model).setIncludeProperties(includeProperties).build()));
-    }
-
-    private <T> T call(Function<NodeServiceBlockingStub, T> rpc) {
-        return call(stub, rpc);
-    }
-
-    private <S extends AbstractBlockingStub<S>, T> T call(S service, Function<S, T> rpc) {
-        val ticket = tickets.ticket();
-        try {
-            return rpc.apply(authenticated(service, ticket));
-        } catch (StatusRuntimeException e) {
-            if (e.getStatus().getCode() != Status.Code.UNAUTHENTICATED)
-                throw e;
-            tickets.invalidate(ticket);
-            val renewed = tickets.ticket();
-            if (renewed.equals(ticket))
-                throw e;
-            return rpc.apply(authenticated(service, renewed));
-        }
-    }
-
-    private <S extends AbstractBlockingStub<S>> S authenticated(S service, String ticket) {
-        return service.withInterceptors(ticketHeader(ticket)).withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS);
-    }
-
-    private static ClientInterceptor ticketHeader(String ticket) {
-        val headers = new Metadata();
-        headers.put(TICKET_HEADER, ticket);
-        return MetadataUtils.newAttachHeadersInterceptor(headers);
+    private static NodeRefRequest nodeRef(String nodeRef) {
+        return NodeRefRequest.newBuilder().setNodeRef(nodeRef).build();
     }
 }

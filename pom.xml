@@ -14,10 +14,12 @@
         <module>protoalf-platform</module>
         <!-- Plain Java gRPC client of the module, reusable by any application -->
         <module>protoalf-client</module>
-        <!-- Spring Boot app: uses protoalf-client, exposes Alfresco tools over MCP -->
+        <!-- Reusable bulk filesystem export utility built on the Java client -->
+        <module>protoalf-bulkexporter</module>
+        <!-- Spring Boot app: uses the client and exporter, exposes Alfresco tools over MCP -->
         <module>protoalf-mcp</module>
-        <!-- Minimal Spring Boot application using protoalf-client -->
-        <module>examples/java-client</module>
+        <!-- Spring Boot example application using the shared Java client -->
+        <module>protoalf-examples</module>
     </modules>
 
     <properties>
