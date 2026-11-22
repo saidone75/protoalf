@@ -5,8 +5,13 @@ import lombok.val;
 import org.saidone.protoalf.client.AlfrescoGrpcChannels;
 import org.saidone.protoalf.client.AuthenticationServiceClient;
 import org.saidone.protoalf.client.BulkExporter;
+import org.saidone.protoalf.client.ContentServiceClient;
+import org.saidone.protoalf.client.DictionaryServiceClient;
+import org.saidone.protoalf.client.FileFolderServiceClient;
 import org.saidone.protoalf.client.NodeServiceClient;
+import org.saidone.protoalf.client.SearchServiceClient;
 import org.saidone.protoalf.client.TicketProvider;
+import org.saidone.protoalf.client.VersionServiceClient;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.context.annotation.Bean;
@@ -27,10 +32,11 @@ public class AlfrescoConfiguration {
     }
 
     /**
-     * Logs in through the Authenticate RPC lazily, on the first tool call: every call runs as the configured user.
+     * Logs in through the Authenticate RPC lazily, on the first tool call: every call runs as the configured
+     * user.
      */
     @Bean
-    TicketProvider alfrescoTicketProvider(ManagedChannel alfrescoGrpcChannel, AlfrescoProperties properties) {
+    AuthenticationServiceClient alfrescoTicketProvider(ManagedChannel alfrescoGrpcChannel, AlfrescoProperties properties) {
         return new AuthenticationServiceClient(alfrescoGrpcChannel, properties.username(), properties.password(), properties.grpc().deadline());
     }
 
@@ -40,17 +46,41 @@ public class AlfrescoConfiguration {
     }
 
     @Bean
-    AlfrescoTools alfrescoTools(NodeServiceClient client) {
-        return new AlfrescoTools(client);
+    FileFolderServiceClient fileFolderServiceClient(ManagedChannel channel, TicketProvider tickets, AlfrescoProperties properties) {
+        return new FileFolderServiceClient(channel, tickets, properties.grpc().deadline());
     }
 
-    /**
-     * Its own client: downloads of an export can take longer than the deadline of the tool calls.
-     */
     @Bean
-    ExportTools exportTools(ManagedChannel alfrescoGrpcChannel, TicketProvider tickets, AlfrescoProperties properties) {
-        val client = new NodeServiceClient(alfrescoGrpcChannel, tickets, properties.export().deadline());
-        return new ExportTools(new BulkExporter(client), properties.export().directory());
+    ContentServiceClient contentServiceClient(ManagedChannel channel, TicketProvider tickets, AlfrescoProperties properties) {
+        return new ContentServiceClient(channel, tickets, properties.grpc().deadline());
+    }
+
+    @Bean
+    VersionServiceClient versionServiceClient(ManagedChannel channel, TicketProvider tickets, AlfrescoProperties properties) {
+        return new VersionServiceClient(channel, tickets, properties.grpc().deadline());
+    }
+
+    @Bean
+    SearchServiceClient searchServiceClient(ManagedChannel channel, TicketProvider tickets, AlfrescoProperties properties) {
+        return new SearchServiceClient(channel, tickets, properties.grpc().deadline());
+    }
+
+    @Bean
+    DictionaryServiceClient dictionaryServiceClient(ManagedChannel channel, TicketProvider tickets, AlfrescoProperties properties) {
+        return new DictionaryServiceClient(channel, tickets, properties.grpc().deadline());
+    }
+
+    @Bean
+    AlfrescoTools alfrescoTools(NodeServiceClient nodes, FileFolderServiceClient files, ContentServiceClient contents,
+                               SearchServiceClient search, DictionaryServiceClient dictionary) {
+        return new AlfrescoTools(nodes, files, contents, search, dictionary);
+    }
+
+    /** Export calls use their own, longer deadline while sharing the channel and authenticated ticket provider. */
+    @Bean
+    ExportTools exportTools(ManagedChannel channel, TicketProvider tickets, AlfrescoProperties properties) {
+        val exporter = new BulkExporter(channel, tickets, properties.export().deadline());
+        return new ExportTools(exporter, properties.export().directory());
     }
 
     /**

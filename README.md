@@ -9,7 +9,7 @@ Work in progress.
 ## Modules
 
 - `protoalf-platform`: Alfresco 7 repository module exposing gRPC services aligned with Alfresco APIs.
-- `protoalf-client`: Java client with ticket authentication and streaming support.
+- `protoalf-client`: one Java client per repository service, sharing ticket authentication and streaming support.
 - `protoalf-mcp`: Spring AI MCP server using the gRPC client.
 - `examples/java-client`: minimal client application.
 

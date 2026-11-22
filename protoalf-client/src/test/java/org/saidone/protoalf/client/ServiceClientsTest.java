@@ -12,6 +12,7 @@ import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.inprocess.InProcessChannelBuilder;
 import io.grpc.inprocess.InProcessServerBuilder;
+import io.grpc.stub.MetadataUtils;
 import io.grpc.stub.StreamObserver;
 import lombok.val;
 import org.junit.jupiter.api.AfterEach;
@@ -31,6 +32,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,11 +40,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Runs the client against an in-process server accepting only the ticket TICKET_OK.
  */
-class NodeServiceClientTest {
+class ServiceClientsTest {
 
     private final List<String> receivedTickets = new CopyOnWriteArrayList<>();
     private final List<CreateNodeRequest> createRequests = new CopyOnWriteArrayList<>();
     private final List<UpdateNodeRequest> updateRequests = new CopyOnWriteArrayList<>();
+    private final List<Object> nodeRequests = new CopyOnWriteArrayList<>();
+    private final List<String> correlations = new CopyOnWriteArrayList<>();
+    private final AtomicInteger authenticationCalls = new AtomicInteger();
+    private static final Metadata.Key<String> CORRELATION = Metadata.Key.of("x-correlation", Metadata.ASCII_STRING_MARSHALLER);
     private Server server;
     private ManagedChannel channel;
 
@@ -50,6 +56,52 @@ class NodeServiceClientTest {
     void setUp() throws Exception {
         val name = InProcessServerBuilder.generateName();
         val service = new NodeServiceGrpc.NodeServiceImplBase() {
+
+            @Override public void getProperties(NodeRefRequest request, StreamObserver<NodeProperties> observer) {
+                observer.onNext(NodeProperties.newBuilder().putProperties("cm:title", Property.newBuilder()
+                        .addValues(PropertyValue.newBuilder().setStringValue("Budget")).build()).build());
+                observer.onCompleted();
+            }
+
+            @Override public void getType(NodeRefRequest request, StreamObserver<NodeType> observer) {
+                observer.onNext(NodeType.newBuilder().setType("cm:content").build());
+                observer.onCompleted();
+            }
+
+            @Override public void getAspects(NodeRefRequest request, StreamObserver<NodeAspects> observer) {
+                observer.onNext(NodeAspects.newBuilder().addAspects("cm:titled").build());
+                observer.onCompleted();
+            }
+
+            @Override public void addProperties(AddPropertiesRequest request, StreamObserver<Node> observer) {
+                nodeRequests.add(request);
+                observer.onNext(Node.newBuilder().setNodeRef(request.getNodeRef()).build());
+                observer.onCompleted();
+            }
+
+            @Override public void setType(SetTypeRequest request, StreamObserver<Node> observer) {
+                nodeRequests.add(request);
+                observer.onNext(Node.newBuilder().setNodeRef(request.getNodeRef()).build());
+                observer.onCompleted();
+            }
+
+            @Override public void addAspect(AddAspectRequest request, StreamObserver<Node> observer) {
+                nodeRequests.add(request);
+                observer.onNext(Node.newBuilder().setNodeRef(request.getNodeRef()).build());
+                observer.onCompleted();
+            }
+
+            @Override public void removeAspect(RemoveAspectRequest request, StreamObserver<Node> observer) {
+                nodeRequests.add(request);
+                observer.onNext(Node.newBuilder().setNodeRef(request.getNodeRef()).build());
+                observer.onCompleted();
+            }
+
+            @Override public void deleteNode(DeleteNodeRequest request, StreamObserver<DeleteNodeResponse> observer) {
+                nodeRequests.add(request);
+                observer.onNext(DeleteNodeResponse.getDefaultInstance());
+                observer.onCompleted();
+            }
 
             @Override public void getNode(GetNodeRequest request, StreamObserver<Node> observer) {
                 observer.onNext(Node.newBuilder().setNodeRef(request.getNodeRef()).setName("Budget.xlsx").build());
@@ -63,6 +115,21 @@ class NodeServiceClientTest {
             }
         };
         val files = new FileFolderServiceGrpc.FileFolderServiceImplBase() {
+
+            @Override public void list(ListChildrenRequest request, StreamObserver<ListChildrenResponse> observer) {
+                observer.onNext(ListChildrenResponse.newBuilder().setTotalItems(3).build());
+                observer.onCompleted();
+            }
+
+            @Override public void move(MoveNodeRequest request, StreamObserver<Node> observer) {
+                observer.onNext(Node.newBuilder().setName(request.getName()).setParentRef(request.getTargetParentRef()).build());
+                observer.onCompleted();
+            }
+
+            @Override public void copy(CopyNodeRequest request, StreamObserver<Node> observer) {
+                observer.onNext(Node.newBuilder().setName(request.getName()).setParentRef(request.getTargetParentRef()).build());
+                observer.onCompleted();
+            }
 
             @Override public void create(CreateNodeRequest request, StreamObserver<Node> observer) {
                 createRequests.add(request);
@@ -85,6 +152,11 @@ class NodeServiceClientTest {
             }
         };
         val dictionary = new DictionaryServiceGrpc.DictionaryServiceImplBase() {
+
+            @Override public void getModel(ListModelsRequest request, StreamObserver<ModelInfo> observer) {
+                observer.onNext(ModelInfo.newBuilder().setName(request.getModel()).build());
+                observer.onCompleted();
+            }
 
             @Override public void getAllModels(ListModelsRequest request, StreamObserver<ListModelsResponse> observer) {
                 observer.onNext(ListModelsResponse.newBuilder().addModels(ModelInfo.newBuilder().setName("cm:contentmodel")).build());
@@ -125,11 +197,19 @@ class NodeServiceClientTest {
                 };
             }
         };
+        val authentication = new AuthenticationServiceGrpc.AuthenticationServiceImplBase() {
+            @Override public void authenticate(LoginRequest request, StreamObserver<LoginResponse> observer) {
+                authenticationCalls.incrementAndGet();
+                observer.onNext(LoginResponse.newBuilder().setTicket("TICKET_OK").build());
+                observer.onCompleted();
+            }
+        };
         val ticketCheck = new ServerInterceptor() {
 
             @Override public <Q, R> ServerCall.Listener<Q> interceptCall(ServerCall<Q, R> call, Metadata headers, ServerCallHandler<Q, R> next) {
-                val ticket = headers.get(NodeServiceClient.TICKET_HEADER);
+                val ticket = headers.get(ClientCallSupport.TICKET_HEADER);
                 receivedTickets.add(String.valueOf(ticket));
+                correlations.add(String.valueOf(headers.get(CORRELATION)));
                 if (!"TICKET_OK".equals(ticket)) {
                     call.close(Status.UNAUTHENTICATED, new Metadata());
                     return new ServerCall.Listener<>() {
@@ -138,7 +218,7 @@ class NodeServiceClientTest {
                 return next.startCall(call, headers);
             }
         };
-        server = InProcessServerBuilder.forName(name).directExecutor().addService(ServerInterceptors.intercept(service, ticketCheck)).addService(ServerInterceptors.intercept(files, ticketCheck)).addService(ServerInterceptors.intercept(search, ticketCheck)).addService(ServerInterceptors.intercept(versions, ticketCheck)).addService(ServerInterceptors.intercept(dictionary, ticketCheck)).addService(ServerInterceptors.intercept(contents, ticketCheck)).build().start();
+        server = InProcessServerBuilder.forName(name).directExecutor().addService(authentication).addService(ServerInterceptors.intercept(service, ticketCheck)).addService(ServerInterceptors.intercept(files, ticketCheck)).addService(ServerInterceptors.intercept(search, ticketCheck)).addService(ServerInterceptors.intercept(versions, ticketCheck)).addService(ServerInterceptors.intercept(dictionary, ticketCheck)).addService(ServerInterceptors.intercept(contents, ticketCheck)).build().start();
         channel = InProcessChannelBuilder.forName(name).directExecutor().build();
     }
 
@@ -183,8 +263,8 @@ class NodeServiceClientTest {
 
     @Test
     void createNodeSendsPropertyValuesAndAspects() {
-        val client = new NodeServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
-        val node = client.createNode("workspace://SpacesStore/parent", "Invoice.pdf", "cm:content", Map.of("cm:title", "Invoice"), Map.of("cm:taggable", List.of("finance", "2026")), List.of("cm:titled"), null);
+        val client = new FileFolderServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
+        val node = client.create("workspace://SpacesStore/parent", "Invoice.pdf", "cm:content", Map.of("cm:title", "Invoice"), Map.of("cm:taggable", List.of("finance", "2026")), List.of("cm:titled"), null);
         assertThat(node.getName()).isEqualTo("Invoice.pdf");
         val sent = createRequests.get(0);
         assertThat(sent.getPropertiesMap()).containsExactly(Map.entry("cm:title", "Invoice"));
@@ -194,8 +274,8 @@ class NodeServiceClientTest {
 
     @Test
     void createNodeWithoutPropertyValuesSendsNone() {
-        val client = new NodeServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
-        client.createNode("workspace://SpacesStore/parent", "Projects", "cm:folder", Map.of("cm:title", "P"), null);
+        val client = new FileFolderServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
+        client.create("workspace://SpacesStore/parent", "Projects", "cm:folder", Map.of("cm:title", "P"), null);
         val sent = createRequests.get(0);
         assertThat(sent.getPropertyValuesMap()).isEmpty();
         assertThat(sent.getAspectsList()).isEmpty();
@@ -225,15 +305,20 @@ class NodeServiceClientTest {
     }
 
     @Test
-    void facadeDispatchesToTheMatchingAlfrescoServices() {
-        val client = new NodeServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
-        assertThat(client.search("TYPE:cm:content", "afts", 0, 10).getTotalItems()).isEqualTo(17);
-        assertThat(client.listVersions("doc").getVersions(0).getLabel()).isEqualTo("1.0");
-        assertThat(client.listModels("", false).getModels(0).getName()).isEqualTo("cm:contentmodel");
-        assertThat(client.getContent("doc", true, 0, 100).getContent().getData().toStringUtf8()).isEqualTo("text");
-        assertThat(client.updateContent("doc", Content.getDefaultInstance()).getNodeRef()).isEqualTo("doc");
+    void clientsDispatchToTheirMatchingAlfrescoServices() {
+        val tickets = TicketProvider.of("TICKET_OK");
+        val deadline = Duration.ofSeconds(5);
+        val search = new SearchServiceClient(channel, tickets, deadline);
+        val versions = new VersionServiceClient(channel, tickets, deadline);
+        val dictionary = new DictionaryServiceClient(channel, tickets, deadline);
+        val contents = new ContentServiceClient(channel, tickets, deadline);
+        assertThat(search.query("TYPE:cm:content", "afts", 0, 10).getTotalItems()).isEqualTo(17);
+        assertThat(versions.getVersionHistory("doc").getVersions(0).getLabel()).isEqualTo("1.0");
+        assertThat(dictionary.getAllModels("", false).getModels(0).getName()).isEqualTo("cm:contentmodel");
+        assertThat(contents.getReader("doc", true, 0, 100).getContent().getData().toStringUtf8()).isEqualTo("text");
+        assertThat(contents.getWriter("doc", Content.getDefaultInstance()).getNodeRef()).isEqualTo("doc");
         val out = new ByteArrayOutputStream();
-        assertThat(client.downloadContent("doc", out).getSize()).isEqualTo(4);
+        assertThat(contents.downloadContent("doc", out).getSize()).isEqualTo(4);
         assertThat(out.toString()).isEqualTo("text");
         assertThat(receivedTickets).hasSize(6).containsOnly("TICKET_OK");
     }
@@ -252,16 +337,71 @@ class NodeServiceClientTest {
                 current = "TICKET_OK";
             }
         };
-        val client = new NodeServiceClient(channel, tickets, Duration.ofSeconds(5));
-        assertThat(client.search("x", "afts", 0, 10).getTotalItems()).isEqualTo(17);
+        val client = new SearchServiceClient(channel, tickets, Duration.ofSeconds(5));
+        assertThat(client.query("x", "afts", 0, 10).getTotalItems()).isEqualTo(17);
         assertThat(receivedTickets).containsExactly("TICKET_EXPIRED", "TICKET_OK");
     }
 
     @Test
     void uploadsUseTheContentService() {
-        val client = new NodeServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
+        val client = new ContentServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
         val content = new ByteArrayInputStream(new byte[] { 1, 2, 3 });
         assertThat(client.uploadContent(CreateDocumentHeader.newBuilder().setParentRef("folder").setName("uploaded.txt").build(), content).getName()).isEqualTo("uploaded.txt");
         assertThat(receivedTickets).containsExactly("TICKET_OK");
     }
+
+    @Test
+    void nativeNodeOperationsUseTheirOwnRpcAndPreservePropertyLists() {
+        val client = new NodeServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
+        assertThat(client.getProperties("doc").get("cm:title").getValues(0).getStringValue()).isEqualTo("Budget");
+        assertThat(client.getType("doc")).isEqualTo("cm:content");
+        assertThat(client.getAspects("doc")).containsExactly("cm:titled");
+        client.addProperties("doc", Map.of("cm:title", "New title"), Map.of("cm:taggable", List.of()));
+        client.setType("doc", "custom:document");
+        client.addAspect("doc", "cm:titled", Map.of(), Map.of("cm:taggable", List.of("finance")));
+        client.removeAspect("doc", "cm:titled");
+        client.deleteNode("doc");
+        assertThat(nodeRequests).hasSize(5);
+        assertThat(((AddPropertiesRequest) nodeRequests.get(0)).getPropertyValuesOrThrow("cm:taggable").getValuesList()).isEmpty();
+        assertThat(((SetTypeRequest) nodeRequests.get(1)).getType()).isEqualTo("custom:document");
+        assertThat(((AddAspectRequest) nodeRequests.get(2)).getPropertyValuesOrThrow("cm:taggable").getValuesList()).containsExactly("finance");
+        assertThat(((RemoveAspectRequest) nodeRequests.get(3)).getAspect()).isEqualTo("cm:titled");
+        assertThat(((DeleteNodeRequest) nodeRequests.get(4)).getNodeRef()).isEqualTo("doc");
+    }
+
+    @Test
+    void fileFolderAndDictionaryClientsExposeThePlatformOperationNames() {
+        val files = new FileFolderServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
+        assertThat(files.list("parent", 0, 100).getTotalItems()).isEqualTo(3);
+        assertThat(files.move("doc", "folder", "moved.txt").getName()).isEqualTo("moved.txt");
+        assertThat(files.copy("doc", "folder", "copy.txt").getParentRef()).isEqualTo("folder");
+        val dictionary = new DictionaryServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
+        assertThat(dictionary.getModel("cm:contentmodel", true).getName()).isEqualTo("cm:contentmodel");
+    }
+
+    @Test
+    void clientsShareOneLazyAuthenticationProvider() {
+        val deadline = Duration.ofSeconds(5);
+        val tickets = new AuthenticationServiceClient(channel, "mcp", "secret", deadline);
+        assertThat(authenticationCalls).hasValue(0);
+        new NodeServiceClient(channel, tickets, deadline).getNode("doc");
+        new FileFolderServiceClient(channel, tickets, deadline).list("parent", 0, 100);
+        new ContentServiceClient(channel, tickets, deadline).getReader("doc", false, 0, 100);
+        new VersionServiceClient(channel, tickets, deadline).getVersionHistory("doc");
+        new SearchServiceClient(channel, tickets, deadline).query("x", "afts", 0, 100);
+        new DictionaryServiceClient(channel, tickets, deadline).getAllModels();
+        assertThat(authenticationCalls).hasValue(1);
+        assertThat(receivedTickets).hasSize(6).containsOnly("TICKET_OK");
+    }
+
+    @Test
+    void preconfiguredStubInterceptorsSurviveTicketAttachment() {
+        val headers = new Metadata();
+        headers.put(CORRELATION, "request-123");
+        val stub = NodeServiceGrpc.newBlockingStub(channel).withInterceptors(MetadataUtils.newAttachHeadersInterceptor(headers));
+        new NodeServiceClient(stub, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5)).getNode("doc");
+        assertThat(correlations).containsExactly("request-123");
+        assertThat(receivedTickets).containsExactly("TICKET_OK");
+    }
+
 }

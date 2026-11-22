@@ -16,7 +16,11 @@ import org.saidone.protoalf.api.ListChildrenResponse;
 import org.saidone.protoalf.api.PropertyInfo;
 import org.saidone.protoalf.api.SearchResponse;
 import org.saidone.protoalf.api.SortField;
+import org.saidone.protoalf.client.ContentServiceClient;
+import org.saidone.protoalf.client.DictionaryServiceClient;
+import org.saidone.protoalf.client.FileFolderServiceClient;
 import org.saidone.protoalf.client.NodeServiceClient;
+import org.saidone.protoalf.client.SearchServiceClient;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import tools.jackson.databind.json.JsonMapper;
@@ -30,18 +34,18 @@ import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 /**
- * Alfresco operations exposed to the LLM as MCP tools.
- * Results are returned as JSON (protobuf JSON mapping). gRPC errors are rethrown as {@link AlfrescoToolException}
- * with a readable message: the MCP server returns it to the client as a tool error ({@code isError: true}),
- * so the model can correct its arguments instead of failing the whole conversation.
+ * Alfresco operations exposed to the LLM as MCP tools. Results are returned as JSON (protobuf JSON mapping).
+ * gRPC errors are rethrown as {@link AlfrescoToolException} with a readable message: the MCP server returns it
+ * to the client as a tool error ({@code isError: true}), so the model can correct its arguments instead of
+ * failing the whole conversation.
  */
 @RequiredArgsConstructor
 public class AlfrescoTools {
 
     /**
      * Proto3 JSON omits fields holding their default value: without this, an empty page would have no "entries"
-     * and the last page no "hasMoreItems" (false). Paging fields are always printed so the model can rely on them;
-     * node fields keep the compact default mapping.
+     * and the last page no "hasMoreItems" (false). Paging fields are always printed so the model can rely on
+     * them; node fields keep the compact default mapping.
      */
     private static final JsonFormat.Printer JSON = JsonFormat.printer().omittingInsignificantWhitespace().includingDefaultValueFields(Set.of(field(ListChildrenResponse.getDescriptor(), ListChildrenResponse.ENTRIES_FIELD_NUMBER), field(ListChildrenResponse.getDescriptor(), ListChildrenResponse.HAS_MORE_ITEMS_FIELD_NUMBER), field(ListChildrenResponse.getDescriptor(), ListChildrenResponse.TOTAL_ITEMS_FIELD_NUMBER), field(SearchResponse.getDescriptor(), SearchResponse.ENTRIES_FIELD_NUMBER), field(SearchResponse.getDescriptor(), SearchResponse.HAS_MORE_ITEMS_FIELD_NUMBER), field(SearchResponse.getDescriptor(), SearchResponse.TOTAL_ITEMS_FIELD_NUMBER), field(PropertyInfo.getDescriptor(), PropertyInfo.MANDATORY_FIELD_NUMBER), field(PropertyInfo.getDescriptor(), PropertyInfo.MULTI_VALUED_FIELD_NUMBER), field(PropertyInfo.getDescriptor(), PropertyInfo.READ_ONLY_FIELD_NUMBER)));
 
@@ -52,7 +56,11 @@ public class AlfrescoTools {
     private static final String FOLDER_PARAM = """
         Folder to list: a nodeRef (workspace://SpacesStore/<id>), a bare node id, \
         or one of the aliases -root- (Company Home), -my- (user home folder), -shared- (Shared Files)""";
-    private final NodeServiceClient client;
+    private final NodeServiceClient nodes;
+    private final FileFolderServiceClient files;
+    private final ContentServiceClient contents;
+    private final SearchServiceClient search;
+    private final DictionaryServiceClient dictionary;
     static final int DEFAULT_READ_BYTES = 100_000;
     private static final JsonMapper SLICES = JsonMapper.builder().build();
 
@@ -75,7 +83,7 @@ public class AlfrescoTools {
         Accepts a nodeRef, a node id or an alias (-root-, -my-, -shared-).""")
     public String getNode(@ToolParam(description = NODE_PARAM) String nodeRef) {
         try {
-            return json(client.getNode(nodeRef));
+            return json(nodes.getNode(nodeRef));
         } catch (StatusRuntimeException e) {
             throw error(e);
         }
@@ -88,7 +96,7 @@ public class AlfrescoTools {
         increase skipCount by the page size to read the next page.""")
     public String listChildren(@ToolParam(description = FOLDER_PARAM) String nodeRef, @ToolParam(description = "Number of items to skip (paging offset), 0 for the first page", required = false) Integer skipCount, @ToolParam(description = "Page size, 1..1000 (default 100)", required = false) Integer maxItems) {
         try {
-            return json(client.listChildren(nodeRef, skipCount == null ? 0 : skipCount, maxItems == null ? 100 : maxItems));
+            return json(files.list(nodeRef, skipCount == null ? 0 : skipCount, maxItems == null ? 100 : maxItems));
         } catch (StatusRuntimeException e) {
             throw error(e);
         }
@@ -98,7 +106,7 @@ public class AlfrescoTools {
         Creates a folder in Alfresco and returns it. Fails with ALREADY_EXISTS if the parent \
         already contains a node with the same name.""")
     public String createFolder(@ToolParam(description = "Parent folder: a nodeRef, a bare node id or an alias (-root-, -my-, -shared-)") String parentRef, @ToolParam(description = "Folder name") String name, @ToolParam(description = PROPERTIES_PARAM, required = false) Map<String, String> properties) {
-        return run(() -> client.createNode(parentRef, text(name), "cm:folder", map(properties), null));
+        return run(() -> files.create(parentRef, text(name), "cm:folder", map(properties), null));
     }
 
     @Tool(name = "alfresco_create_document", description = """
@@ -107,7 +115,7 @@ public class AlfrescoTools {
         the name extension unless given. Fails with ALREADY_EXISTS if the name is taken.""")
     public String createDocument(@ToolParam(description = "Parent folder: a nodeRef, a bare node id or an alias (-root-, -my-, -shared-)") String parentRef, @ToolParam(description = "Document name including the extension, e.g. notes.md") String name, @ToolParam(description = "Text content (UTF-8)", required = false) String content, @ToolParam(description = "Binary content encoded in base64", required = false) String contentBase64, @ToolParam(description = "Mimetype, e.g. text/markdown; guessed from the name when omitted", required = false) String mimetype, @ToolParam(description = PROPERTIES_PARAM, required = false) Map<String, String> properties) {
         val body = content(content, contentBase64, mimetype, false);
-        return run(() -> client.createNode(parentRef, text(name), "cm:content", map(properties), body));
+        return run(() -> files.create(parentRef, text(name), "cm:content", map(properties), body));
     }
 
     @Tool(name = "alfresco_update_node", description = """
@@ -118,19 +126,19 @@ public class AlfrescoTools {
     public String updateNode(@ToolParam(description = NODE_PARAM) String nodeRef, @ToolParam(description = "New name, omit to keep the current one", required = false) String name, @ToolParam(description = """
         New type, e.g. a custom document type; omit to keep the current one. A document must stay a \
         cm:content subtype and a folder a cm:folder subtype""", required = false) String type, @ToolParam(description = PROPERTIES_PARAM, required = false) Map<String, String> properties) {
-        return run(() -> client.updateNode(nodeRef, text(name), text(type), map(properties)));
+        return run(() -> nodes.updateNode(nodeRef, text(name), text(type), map(properties)));
     }
 
     @Tool(name = "alfresco_move_node", description = "Moves a document or folder into another folder, optionally renaming it, and returns it.")
     public String moveNode(@ToolParam(description = NODE_PARAM) String nodeRef, @ToolParam(description = TARGET_PARAM) String targetParentRef, @ToolParam(description = "New name, omit to keep the current one", required = false) String name) {
-        return run(() -> client.moveNode(nodeRef, targetParentRef, text(name)));
+        return run(() -> files.move(nodeRef, targetParentRef, text(name)));
     }
 
     @Tool(name = "alfresco_copy_node", description = """
         Copies a document or folder (with all its content) into a folder, optionally with a new name, \
         and returns the copy.""")
     public String copyNode(@ToolParam(description = NODE_PARAM) String nodeRef, @ToolParam(description = TARGET_PARAM) String targetParentRef, @ToolParam(description = "Name of the copy, omit to keep the original name", required = false) String name) {
-        return run(() -> client.copyNode(nodeRef, targetParentRef, text(name)));
+        return run(() -> files.copy(nodeRef, targetParentRef, text(name)));
     }
 
     @Tool(name = "alfresco_delete_node", description = """
@@ -138,7 +146,7 @@ public class AlfrescoTools {
         from where an administrator can restore it. Ask the user for confirmation before deleting.""")
     public String deleteNode(@ToolParam(description = NODE_PARAM) String nodeRef) {
         try {
-            client.deleteNode(nodeRef);
+            nodes.deleteNode(nodeRef);
             return "Deleted %s (moved to the trashcan)".formatted(nodeRef);
         } catch (StatusRuntimeException e) {
             throw error(e);
@@ -157,7 +165,7 @@ public class AlfrescoTools {
         val start = offset == null ? 0 : offset;
         GetContentResponse response;
         try {
-            response = client.getContent(nodeRef, !raw, start, maxBytes == null ? DEFAULT_READ_BYTES : maxBytes);
+            response = contents.getReader(nodeRef, !raw, start, maxBytes == null ? DEFAULT_READ_BYTES : maxBytes);
         } catch (StatusRuntimeException e) {
             throw error(e);
         }
@@ -171,7 +179,7 @@ public class AlfrescoTools {
         ('contentBase64'), then returns the document.""")
     public String updateContent(@ToolParam(description = NODE_PARAM) String nodeRef, @ToolParam(description = "New text content (UTF-8)", required = false) String content, @ToolParam(description = "New binary content encoded in base64", required = false) String contentBase64, @ToolParam(description = "Mimetype; guessed from the document name when omitted", required = false) String mimetype) {
         val body = content(content, contentBase64, mimetype, true);
-        return run(() -> client.updateContent(nodeRef, body));
+        return run(() -> contents.getWriter(nodeRef, body));
     }
 
     /**
@@ -222,7 +230,7 @@ public class AlfrescoTools {
         field is a property (e.g. cm:name, cm:modified, cm:created) or score (relevance). \
         Example: 'cm:modified desc, cm:name'""", required = false) String sort) {
         try {
-            return json(client.search(query, "afts", skipCount == null ? 0 : skipCount, maxItems == null ? 25 : maxItems, sort(sort)));
+            return json(search.query(query, "afts", skipCount == null ? 0 : skipCount, maxItems == null ? 25 : maxItems, sort(sort)));
         } catch (StatusRuntimeException e) {
             throw error(e);
         }
@@ -254,7 +262,7 @@ public class AlfrescoTools {
         as cm, or a model name such as cm:contentmodel) it lists that model only. Properties are those \
         a type/aspect defines itself: inherited ones are on its parent. readOnly properties cannot be set.""")
     public String listModels(@ToolParam(description = "Namespace prefix (e.g. cm) or model name (e.g. cm:contentmodel); omit for every model", required = false) String model, @ToolParam(description = "Also list the properties of each type and aspect; requires model", required = false) Boolean includeProperties) {
-        return run(() -> client.listModels(text(model), Boolean.TRUE.equals(includeProperties)));
+        return run(() -> dictionary.getAllModels(text(model), Boolean.TRUE.equals(includeProperties)));
     }
 
     private static Descriptors.FieldDescriptor field(Descriptors.Descriptor message, int number) {
