@@ -13,14 +13,37 @@ import org.saidone.protoalf.api.LoginRequest;
 import org.saidone.protoalf.api.LoginResponse;
 
 /**
- * Exchanges user and password for an Alfresco ticket. Runs without a ticket: see TicketInterceptor.
+ * Authenticates Alfresco credentials and returns the resulting repository ticket.
+ *
+ * <p>This is the only service operation allowed without an existing {@code alfresco-ticket} header. It combines
+ * Alfresco authentication and retrieval of the current ticket in one RPC. The previous thread-local
+ * authentication is restored on both success and failure; authentication does not remain attached to the gRPC
+ * worker thread.
+ *
+ * <p>Subsequent repository calls must send the returned ticket to {@link TicketInterceptor}.
+ *
+ * @see AuthenticationService
  */
 @Slf4j
 @RequiredArgsConstructor
 public final class GrpcAuthenticationService extends AuthenticationServiceGrpc.AuthenticationServiceImplBase {
 
+    /**
+     * Alfresco authentication service used to validate credentials and obtain tickets.
+     */
     private final AuthenticationService authentication;
 
+    /**
+     * Authenticates credentials and retrieves the current Alfresco ticket in the same call. Blank credentials
+     * yield {@code INVALID_ARGUMENT}, rejected credentials yield {@code UNAUTHENTICATED}, and unexpected
+     * failures yield {@code INTERNAL}.
+     *
+     * <p>No existing ticket is required. The previous thread authentication is restored before the successful
+     * response is emitted.
+     *
+     * @param request required username and password
+     * @param observer receives one repository ticket on success, or the corresponding gRPC error
+     */
     @Override public void authenticate(LoginRequest request, StreamObserver<LoginResponse> observer) {
         val user = request.getUser();
         val password = request.getPassword();

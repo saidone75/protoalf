@@ -28,15 +28,31 @@ import java.util.Map;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
-/** Shared authentication context, transactions, node reference resolution and error translation for repository adapters. */
+/**
+ * Provides shared transaction execution, reference resolution and gRPC error translation.
+ *
+ * <p>Service adapters use this helper rather than emitting responses from transaction callbacks. Alfresco may
+ * retry a callback, so unary results are sent only after its transaction succeeds. Authentication is scoped to
+ * each callback with Alfresco's run-as utility, preserving the worker thread's previous identity.
+ *
+ * <p>Reference resolution and repository callbacks must run inside a transaction. Static conversion and
+ * pagination helpers are independent of transaction state. Status translation deliberately omits internal
+ * exception details for permission failures and unexpected repository errors.
+ */
 @RequiredArgsConstructor
 @Slf4j
 final class GrpcServiceSupport {
 
+    /**
+     * Repository services used under the caller's transaction and authentication context.
+     */
     private final ServiceRegistry services;
 
     /**
-     * The property_values of a request as name -> list of text values.
+     * Unwraps Protobuf property-value lists into a Java map without dictionary conversion or validation.
+     *
+     * @param input property names mapped to Protobuf lists
+     * @return a new map preserving each property's ordered text values
      */
     static Map<String, List<String>> values(Map<String, PropertyValues> input) {
         val result = new HashMap<String, List<String>>();
@@ -45,15 +61,29 @@ final class GrpcServiceSupport {
     }
 
     /**
-     * Node aliases accepted in place of a nodeRef, as in the Alfresco REST API. Resolved as the calling user.
+     * Remote root, current-user home and shared aliases mapped to Alfresco node locators.
      */
     static final Map<String, String> ALIASES = Map.of("-root-", CompanyHomeNodeLocator.NAME, "-my-", UserHomeNodeLocator.NAME, "-shared-", SharedHomeNodeLocator.NAME);
+
+    /**
+     * Accepted syntax for a bare workspace node ID; values are never interpreted as filesystem paths.
+     */
     private static final Pattern NODE_ID = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.-]{0,99}");
 
+    /**
+     * Validation message listing the accepted node reference and alias forms.
+     */
     private static final String USAGE = "node_ref must be a nodeRef (workspace://SpacesStore/<id>), a node id or one of the aliases -root-, -my-, -shared-";
 
     /**
-     * Accepts a full nodeRef, a bare node id (workspace://SpacesStore) or an alias. Must run inside the transaction.
+     * Resolves a node reference, bare workspace ID or supported alias and verifies that the node exists. Must
+     * run inside the caller's repository transaction. Alias resolution uses the caller identity.
+     *
+     * @param value full node reference, bare node ID, -root-, -my- or -shared-
+     * @return the resolved existing repository node reference
+     * @throws IllegalArgumentException if the value is blank or malformed
+     * @throws StatusRuntimeException with NOT_FOUND if the alias has no node or the resolved node does not
+     *     exist
      */
     NodeRef ref(String value) {
         if (value == null || value.isBlank())
@@ -76,6 +106,14 @@ final class GrpcServiceSupport {
         return ref;
     }
 
+    /**
+     * Normalizes the default page size and validates pagination without integer overflow.
+     *
+     * @param skipCount non-negative number of entries to skip
+     * @param maxItems requested size in 1..1000, or zero to select 100
+     * @return the effective page size
+     * @throws IllegalArgumentException if the size, skip count or their sum is out of range
+     */
     static int pageSize(int skipCount, int maxItems) {
         val size = maxItems == 0 ? 100 : maxItems;
         if (size < 1 || size > 1000 || skipCount < 0 || skipCount > Integer.MAX_VALUE - size)
@@ -83,14 +121,39 @@ final class GrpcServiceSupport {
         return size;
     }
 
+    /**
+     * Executes one unary repository operation in a read-only transaction and emits its response after
+     * successful completion.
+     *
+     * @param <T> response message type
+     * @param observer receives one result and completion, or a translated gRPC error
+     * @param work repository callback; it must not emit responses and may run more than once
+     */
     <T> void execute(StreamObserver<T> observer, Supplier<T> work) {
         run(observer, true, work);
     }
 
+    /**
+     * Executes one unary repository operation in a read-write transaction and emits its response after
+     * successful completion.
+     *
+     * @param <T> response message type
+     * @param observer receives one result and completion, or a translated gRPC error
+     * @param work repository callback; it must not emit responses and may run more than once
+     */
     <T> void write(StreamObserver<T> observer, Supplier<T> work) {
         run(observer, false, work);
     }
 
+    /**
+     * Runs a unary callback as the context user and reports the result outside the transaction. Missing
+     * authentication is rejected before touching transaction services.
+     *
+     * @param <T> response message type
+     * @param observer response observer to complete or fail
+     * @param readOnly whether the repository transaction forbids writes
+     * @param work retryable callback that produces the response without sending it
+     */
     private <T> void run(StreamObserver<T> observer, boolean readOnly, Supplier<T> work) {
         val user = TicketInterceptor.USER.get();
         if (user == null) {
@@ -110,7 +173,16 @@ final class GrpcServiceSupport {
     }
 
     /**
-     * Runs the work in a transaction as the user. Failures are thrown as the gRPC status to report.
+     * Executes work under the requested Alfresco identity and transaction mode, then translates repository
+     * failures to gRPC status exceptions. The previous authentication context is restored by the run-as
+     * utility.
+     *
+     * @param <T> callback result type
+     * @param user authenticated repository username
+     * @param readOnly true for read-only work, false for mutations
+     * @param work retryable repository callback; external side effects must be retry-safe
+     * @return the successful callback result
+     * @throws StatusRuntimeException for mapped repository failures; existing status exceptions are preserved
      */
     <T> T transact(String user, boolean readOnly, Supplier<T> work) {
         try {
@@ -138,6 +210,12 @@ final class GrpcServiceSupport {
         }
     }
 
+    /**
+     * Finds the deepest non-self-referencing cause and returns a useful diagnostic label.
+     *
+     * @param e failure whose underlying message is required
+     * @return the deepest message, or the cause class simple name when its message is null
+     */
     static String rootMessage(Throwable e) {
         while (e.getCause() != null && e.getCause() != e) e = e.getCause();
         return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();

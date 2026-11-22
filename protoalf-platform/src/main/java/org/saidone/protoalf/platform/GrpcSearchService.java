@@ -18,14 +18,41 @@ import org.saidone.protoalf.api.*;
 import java.util.List;
 import java.util.Map;
 
-/** Adapts Alfresco SearchService.query with query language, pagination and ordered sort parameters. */
+/**
+ * Adapts Alfresco's search service to paged, permission-filtered gRPC queries.
+ *
+ * <p>Queries target the workspace store and support AFTS and CMIS SQL. AFTS accepts an ordered list of property
+ * or relevance sort fields; CMIS sorting belongs in the query's {@code ORDER BY} clause. Search results reflect
+ * the index and may lag repository writes. Nodes deleted since indexing are omitted from the returned entries.
+ *
+ * <p>Queries run in a read-only transaction as the authenticated caller. The backing result set is always
+ * closed, including when node mapping fails.
+ *
+ * @see SearchService
+ */
 @Slf4j
 public final class GrpcSearchService extends SearchServiceGrpc.SearchServiceImplBase {
 
+    /**
+     * Repository services used under the caller's transaction and authentication context.
+     */
     private final ServiceRegistry services;
+
+    /**
+     * Shared caller-context, transaction, reference-resolution and error-mapping helper.
+     */
     private final GrpcServiceSupport support;
+
+    /**
+     * Converter from repository state to transport-safe node snapshots.
+     */
     private final NodeMapper mapper;
 
+    /**
+     * Creates the adapter and its repository helpers without starting repository work.
+     *
+     * @param services Alfresco service registry; repository work uses its secured services
+     */
     public GrpcSearchService(ServiceRegistry services) {
         this.services = services;
         this.support = new GrpcServiceSupport(services);
@@ -33,12 +60,33 @@ public final class GrpcSearchService extends SearchServiceGrpc.SearchServiceImpl
     }
 
     /**
-     * Accepted values of SearchRequest.language.
+     * Remote language identifiers mapped to Alfresco search language constants.
      */
     static final Map<String, String> LANGUAGES = Map.of("afts", SearchService.LANGUAGE_FTS_ALFRESCO, "cmis", SearchService.LANGUAGE_CMIS_ALFRESCO);
+
+    /**
+     * Maximum accepted query length in Java characters.
+     */
     static final int MAX_QUERY_LENGTH = 4096;
+
+    /**
+     * Maximum number of explicit AFTS sort fields accepted per request.
+     */
     static final int MAX_SORT_FIELDS = 10;
 
+    /**
+     * Runs a permission-filtered query against the workspace store. Language defaults to {@code afts}; {@code
+     * cmis} is also accepted. The query must contain 1..4096 characters and a page must contain 1..1000 entries
+     * (zero selects 100).
+     *
+     * <p>AFTS accepts up to ten ordered property/relevance sort fields. CMIS queries must use {@code ORDER BY}
+     * instead. Invalid queries or sort fields yield {@code INVALID_ARGUMENT}. Indexed nodes that no longer
+     * exist are omitted without recomputing the search engine's total count.
+     *
+     * @param request query text, language, pagination and optional ordered AFTS sort fields
+     * @param observer receives one result page with matching node snapshots, total count and continuation flag,
+     *     or a gRPC error
+     */
     @Override public void query(SearchRequest request, StreamObserver<SearchResponse> observer) {
         support.execute(observer, () -> {
             val query = request.getQuery();
@@ -76,7 +124,14 @@ public final class GrpcSearchService extends SearchServiceGrpc.SearchServiceImpl
     }
 
     /**
-     * Adds the sort criteria of SearchRequest.sort: properties must exist in the dictionary, "score" is the relevance.
+     * Validates and appends AFTS sort criteria in request order. Property names must resolve to dictionary
+     * properties; score selects relevance. CMIS sorting belongs in the query itself.
+     *
+     * @param parameters search parameters to mutate
+     * @param languageName remote language identifier, afts or cmis
+     * @param sort ordered fields, each ascending unless explicitly descending
+     * @throws IllegalArgumentException if explicit sorting is unsupported, too long or references an unknown
+     *     property
      */
     private void sort(SearchParameters parameters, String languageName, List<SortField> sort) {
         if (sort.isEmpty())
