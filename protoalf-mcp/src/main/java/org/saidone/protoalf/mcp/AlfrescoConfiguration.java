@@ -71,9 +71,28 @@ public class AlfrescoConfiguration {
     }
 
     @Bean
-    AlfrescoTools alfrescoTools(NodeServiceClient nodes, FileFolderServiceClient files, ContentServiceClient contents,
-                               SearchServiceClient search, DictionaryServiceClient dictionary) {
-        return new AlfrescoTools(nodes, files, contents, search, dictionary);
+    NodeServiceTools nodeServiceTools(NodeServiceClient nodes) {
+        return new NodeServiceTools(nodes);
+    }
+
+    @Bean
+    FileFolderServiceTools fileFolderServiceTools(FileFolderServiceClient files) {
+        return new FileFolderServiceTools(files);
+    }
+
+    @Bean
+    ContentServiceTools contentServiceTools(ContentServiceClient contents) {
+        return new ContentServiceTools(contents);
+    }
+
+    @Bean
+    SearchServiceTools searchServiceTools(SearchServiceClient search) {
+        return new SearchServiceTools(search);
+    }
+
+    @Bean
+    DictionaryServiceTools dictionaryServiceTools(DictionaryServiceClient dictionary) {
+        return new DictionaryServiceTools(dictionary);
     }
 
     /** Export calls use their own, longer deadline while sharing the channel and authenticated ticket provider. */
@@ -87,7 +106,9 @@ public class AlfrescoConfiguration {
      * Picked up by the Spring AI MCP server auto-configuration and published as MCP tools.
      */
     @Bean
-    ToolCallbackProvider alfrescoToolCallbacks(AlfrescoTools tools, ExportTools exportTools) {
-        return MethodToolCallbackProvider.builder().toolObjects(tools, exportTools).build();
+    ToolCallbackProvider alfrescoToolCallbacks(NodeServiceTools nodes, FileFolderServiceTools files,
+                                               ContentServiceTools contents, SearchServiceTools search,
+                                               DictionaryServiceTools dictionary, ExportTools exportTools) {
+        return MethodToolCallbackProvider.builder().toolObjects(nodes, files, contents, search, dictionary, exportTools).build();
     }
 }

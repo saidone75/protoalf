@@ -37,11 +37,22 @@ class AlfrescoConfigurationTest {
                     .hasSingleBean(VersionServiceClient.class)
                     .hasSingleBean(SearchServiceClient.class)
                     .hasSingleBean(DictionaryServiceClient.class)
+                    .hasSingleBean(NodeServiceTools.class)
+                    .hasSingleBean(FileFolderServiceTools.class)
+                    .hasSingleBean(ContentServiceTools.class)
+                    .hasSingleBean(SearchServiceTools.class)
+                    .hasSingleBean(DictionaryServiceTools.class)
                     .hasSingleBean(ExportTools.class);
             assertThat(context.getBean(ToolCallbackProvider.class).getToolCallbacks())
                     .hasSize(14)
                     .extracting(callback -> callback.getToolDefinition().name())
-                    .contains("alfresco_get_node", "alfresco_search", "alfresco_read_content", "alfresco_export_bulk");
+                    .containsExactlyInAnyOrder(
+                            "alfresco_get_node", "alfresco_update_node", "alfresco_delete_node",
+                            "alfresco_list_children", "alfresco_create_folder", "alfresco_create_document",
+                            "alfresco_move_node", "alfresco_copy_node",
+                            "alfresco_read_content", "alfresco_update_content",
+                            "alfresco_search", "alfresco_list_models",
+                            "alfresco_export_bulk", "alfresco_export_status");
         });
     }
 }

@@ -58,12 +58,12 @@ public class ExportTools implements AutoCloseable {
         Name of the directory to create for the export, e.g. invoices-2024: letters, digits, \
         '.', '-' and '_'. It must not exist yet, or be empty""") String name, @ToolParam(description = "true (default) to export subfolders and their content too, false for the documents of the folder only", required = false) Boolean recursive) {
         if (name == null || !DIRECTORY_NAME.matcher(name).matches())
-            throw new AlfrescoTools.AlfrescoToolException("Invalid directory name '%s': use letters, digits, '.', '-' and '_'".formatted(name), null);
+            throw new ToolSupport.AlfrescoToolException("Invalid directory name '%s': use letters, digits, '.', '-' and '_'".formatted(name), null);
         val target = directory.resolve(name);
         if (exports.values().stream().anyMatch(export -> export.target.equals(target) && !export.progress.finished()))
-            throw new AlfrescoTools.AlfrescoToolException("An export into %s is already running".formatted(name), null);
+            throw new ToolSupport.AlfrescoToolException("An export into %s is already running".formatted(name), null);
         if (!isEmpty(target))
-            throw new AlfrescoTools.AlfrescoToolException("Directory %s already exists and is not empty".formatted(name), null);
+            throw new ToolSupport.AlfrescoToolException("Directory %s already exists and is not empty".formatted(name), null);
         val export = new Export(UUID.randomUUID().toString(), folderRef, target, Instant.now(), new BulkExporter.Progress());
         exports.put(export.id, export);
         executor.submit(() -> run(export, !Boolean.FALSE.equals(recursive)));
@@ -76,7 +76,7 @@ public class ExportTools implements AutoCloseable {
     public String status(@ToolParam(description = "Export id returned by alfresco_export_bulk") String exportId) {
         val export = exports.get(exportId);
         if (export == null)
-            throw new AlfrescoTools.AlfrescoToolException("No export with id %s".formatted(exportId), null);
+            throw new ToolSupport.AlfrescoToolException("No export with id %s".formatted(exportId), null);
         return status(export);
     }
 

@@ -10,7 +10,7 @@
     </parent>
     <artifactId>protoalf-examples</artifactId>
     <name>protoalf-examples</name>
-    <description>Minimal Spring Boot application using protoalf-client: lists the children of Company Home</description>
+    <description>Minimal Spring Boot application using protoalf-client</description>
 
     <properties>
         <java.version>21</java.version>
