@@ -3,6 +3,7 @@ package org.saidone.protoalf.mcp;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
+import java.nio.file.Path;
 import java.time.Duration;
 
 /**
@@ -14,11 +15,7 @@ import java.time.Duration;
  * @param export   settings of the bulk import exports (alfresco_export_bulk)
  */
 @ConfigurationProperties("alfresco")
-public record AlfrescoProperties(
-        @DefaultValue("admin") String username,
-        @DefaultValue("admin") String password,
-        @DefaultValue Grpc grpc,
-        @DefaultValue Export export) {
+public record AlfrescoProperties(@DefaultValue("admin") String username, @DefaultValue("admin") String password, @DefaultValue Grpc grpc, @DefaultValue Export export) {
 
     /**
      * @param host               gRPC host
@@ -28,12 +25,7 @@ public record AlfrescoProperties(
      * @param authorityOverride  TLS host name to verify instead of {@code host}; empty to use {@code host}
      * @param deadline           per-call deadline
      */
-    public record Grpc(
-            @DefaultValue("localhost") String host,
-            @DefaultValue("9090") int port,
-            @DefaultValue("") String trustCertificate,
-            @DefaultValue("") String authorityOverride,
-            @DefaultValue("30s") Duration deadline) {
+    public record Grpc(@DefaultValue("localhost") String host, @DefaultValue("9090") int port, @DefaultValue("") String trustCertificate, @DefaultValue("") String authorityOverride, @DefaultValue("30s") Duration deadline) {
     }
 
     /**
@@ -41,8 +33,6 @@ public record AlfrescoProperties(
      * @param deadline  deadline of each call of an export: a download must complete within it, so it is longer
      *                  than the per-call deadline of the tools
      */
-    public record Export(
-            @DefaultValue("export") java.nio.file.Path directory,
-            @DefaultValue("30m") Duration deadline) {
+    public record Export(@DefaultValue("export") Path directory, @DefaultValue("30m") Duration deadline) {
     }
 }

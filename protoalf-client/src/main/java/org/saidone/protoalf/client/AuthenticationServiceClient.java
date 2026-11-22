@@ -1,9 +1,9 @@
 package org.saidone.protoalf.client;
 
-import lombok.val;
 import io.grpc.Channel;
-import org.saidone.protoalf.api.AuthenticationServiceGrpc;
+import lombok.val;
 import org.saidone.protoalf.api.AuthenticationServiceGrpc.AuthenticationServiceBlockingStub;
+import org.saidone.protoalf.api.AuthenticationServiceGrpc;
 import org.saidone.protoalf.api.LoginRequest;
 
 import java.time.Duration;
@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Client of the AuthenticationService of the gRPC module: exchanges user and password for an Alfresco ticket,
- * gRPC only, no REST. Login sends no ticket header: it is the only call that needs none.
+ * gRPC only, no REST. Authenticate sends no ticket header: it is the only call that needs none.
  * <p>
  * Built with credentials it is also the {@link TicketProvider} of a {@link NodeServiceClient}: it logs in lazily,
  * on the first {@link #ticket()}, caches the ticket and logs in again after {@link #invalidate}. Wrong credentials
@@ -53,30 +53,37 @@ public class AuthenticationServiceClient implements TicketProvider {
         this.password = password;
     }
 
-    /** Exchanges user and password for a new ticket. Wrong credentials are UNAUTHENTICATED. */
+    /**
+     * Exchanges user and password for a new ticket. Wrong credentials are UNAUTHENTICATED.
+     */
     public String login(String user, String password) {
-        val value = stub.withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS)
-                .login(LoginRequest.newBuilder().setUser(user).setPassword(password).build())
-                .getTicket();
-        if (value.isEmpty()) throw new IllegalStateException("The server returned no ticket for user %s".formatted(user));
+        val value = stub.withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS).authenticate(LoginRequest.newBuilder().setUser(user).setPassword(password).build()).getTicket();
+        if (value.isEmpty())
+            throw new IllegalStateException("The server returned no ticket for user %s".formatted(user));
         return value;
     }
 
-    /** Returns the cached ticket, logging in with the credentials of the constructor if there is none. */
-    @Override
-    public String ticket() {
+    /**
+     * Returns the cached ticket, logging in with the credentials of the constructor if there is none.
+     */
+    @Override public String ticket() {
         val current = ticket;
-        if (current != null) return current;
-        if (user == null) throw new IllegalStateException("No credentials: build the client with user and password");
+        if (current != null)
+            return current;
+        if (user == null)
+            throw new IllegalStateException("No credentials: build the client with user and password");
         synchronized (this) {
-            if (ticket == null) ticket = login(user, password);
+            if (ticket == null)
+                ticket = login(user, password);
             return ticket;
         }
     }
 
-    /** Drops {@code expired} so that the next {@link #ticket()} call logs in again. */
-    @Override
-    public synchronized void invalidate(String expired) {
-        if (expired != null && expired.equals(ticket)) ticket = null;
+    /**
+     * Drops {@code expired} so that the next {@link #ticket()} call logs in again.
+     */
+    @Override public synchronized void invalidate(String expired) {
+        if (expired != null && expired.equals(ticket))
+            ticket = null;
     }
 }

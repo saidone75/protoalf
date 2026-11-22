@@ -26,12 +26,16 @@ public class ExampleApplication implements CommandLineRunner {
 
     @Value("${alfresco.host}")
     String host;
+
     @Value("${alfresco.port}")
     int port;
+
     @Value("${alfresco.trust-certificate}")
     String trustCertificate;
+
     @Value("${alfresco.username}")
     String username;
+
     @Value("${alfresco.password}")
     String password;
 
@@ -39,28 +43,23 @@ public class ExampleApplication implements CommandLineRunner {
         SpringApplication.run(ExampleApplication.class, args);
     }
 
-    @Override
-    public void run(String @NonNull ... args) throws Exception {
+    @Override public void run(String@NonNull ... args) throws Exception {
         val channel = AlfrescoGrpcChannels.create(host, port, trustCertificate, null);
         try {
             // Logs in on the first call, and again if the ticket expires
             val tickets = new AuthenticationServiceClient(channel, username, password, DEADLINE);
             val client = new NodeServiceClient(channel, tickets, DEADLINE);
-
             System.out.println("Company Home:");
             client.listChildren("-root-", 0, 100).getEntriesList().forEach(ExampleApplication::print);
-
             System.out.println("Last modified documents:");
             val newestFirst = List.of(SortField.newBuilder().setField("cm:modified").setDescending(true).build());
-            client.search("TYPE:\"cm:content\"", "afts", 0, 10, newestFirst).getEntriesList()
-                    .forEach(ExampleApplication::print);
+            client.search("TYPE:\"cm:content\"", "afts", 0, 10, newestFirst).getEntriesList().forEach(ExampleApplication::print);
         } finally {
             channel.shutdownNow();
         }
     }
 
     private static void print(Node node) {
-        System.out.printf("  %-40s %s (parent %s)%n", node.getName(), node.getNodeRef(),
-                node.getParentRef().isEmpty() ? "-" : node.getParentRef());
+        System.out.printf("  %-40s %s (parent %s)%n", node.getName(), node.getNodeRef(), node.getParentRef().isEmpty() ? "-" : node.getParentRef());
     }
 }

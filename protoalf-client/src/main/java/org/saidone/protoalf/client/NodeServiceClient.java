@@ -2,9 +2,12 @@ package org.saidone.protoalf.client;
 
 import com.google.protobuf.ByteString;
 import io.grpc.*;
+import io.grpc.stub.AbstractBlockingStub;
 import io.grpc.stub.ClientCallStreamObserver;
 import io.grpc.stub.ClientResponseObserver;
 import io.grpc.stub.MetadataUtils;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 import lombok.val;
 import org.saidone.protoalf.api.*;
 import org.saidone.protoalf.api.NodeServiceGrpc.NodeServiceBlockingStub;
@@ -31,26 +34,31 @@ import java.util.stream.Collectors;
  *
  * <pre>{@code
  * ManagedChannel channel = AlfrescoGrpcChannels.create("localhost", 9090, "ca.crt", null);
- * var tickets = new AuthenticationServiceClient(channel, "admin", "admin", Duration.ofSeconds(30));
- * var client = new NodeServiceClient(channel, tickets, Duration.ofSeconds(30));
+ * val tickets = new AuthenticationServiceClient(channel, "admin", "admin", Duration.ofSeconds(30));
+ * val client = new NodeServiceClient(channel, tickets, Duration.ofSeconds(30));
  * Node home = client.getNode("-my-");
  * }</pre>
  */
+@RequiredArgsConstructor(access = AccessLevel.PRIVATE)
 public class NodeServiceClient {
 
-    /** gRPC header carrying the Alfresco ticket. */
-    public static final Metadata.Key<String> TICKET_HEADER =
-            Metadata.Key.of("alfresco-ticket", Metadata.ASCII_STRING_MARSHALLER);
+    /**
+     * gRPC header carrying the Alfresco ticket.
+     */
+    public static final Metadata.Key<String> TICKET_HEADER = Metadata.Key.of("alfresco-ticket", Metadata.ASCII_STRING_MARSHALLER);
 
-    /** Chunk size of UploadContent messages. */
+    /**
+     * Chunk size of UploadContent messages.
+     */
     private static final int UPLOAD_CHUNK_SIZE = 1024 * 1024;
-
     private final Channel channel;
     private final NodeServiceBlockingStub stub;
     private final TicketProvider tickets;
     private final Duration deadline;
 
-    /** @param deadline per-call deadline */
+    /**
+     * @param deadline per-call deadline
+     */
     public NodeServiceClient(Channel channel, TicketProvider tickets, Duration deadline) {
         this(channel, NodeServiceGrpc.newBlockingStub(channel), tickets, deadline);
     }
@@ -59,51 +67,17 @@ public class NodeServiceClient {
         this(stub.getChannel(), stub, tickets, deadline);
     }
 
-    private NodeServiceClient(Channel channel, NodeServiceBlockingStub stub, TicketProvider tickets, Duration deadline) {
-        this.channel = channel;
-        this.stub = stub;
-        this.tickets = tickets;
-        this.deadline = deadline;
-    }
-
     public Node getNode(String nodeRef) {
         return call(s -> s.getNode(GetNodeRequest.newBuilder().setNodeRef(nodeRef).build()));
     }
 
     public ListChildrenResponse listChildren(String nodeRef, int skipCount, int maxItems) {
-        return call(s -> s.listChildren(ListChildrenRequest.newBuilder()
-                .setNodeRef(nodeRef).setSkipCount(skipCount).setMaxItems(maxItems).build()));
-    }
-
-    public SearchResponse search(String query, String language, int skipCount, int maxItems) {
-        return search(query, language, skipCount, maxItems, List.of());
-    }
-
-    /** @param sort sort criteria, applied in order (afts only); empty to sort by relevance */
-    public SearchResponse search(String query, String language, int skipCount, int maxItems, List<SortField> sort) {
-        return call(s -> s.search(SearchRequest.newBuilder().setQuery(query).setLanguage(language)
-                .setSkipCount(skipCount).setMaxItems(maxItems).addAllSort(sort).build()));
-    }
-
-    public ListModelsResponse listModels(String model, boolean includeProperties) {
-        return call(s -> s.listModels(ListModelsRequest.newBuilder().setModel(model)
-                .setIncludeProperties(includeProperties).build()));
-    }
-
-    public GetContentResponse getContent(String nodeRef, boolean text, long offset, int maxBytes) {
-        return call(s -> s.getContent(GetContentRequest.newBuilder().setNodeRef(nodeRef).setText(text)
-                .setOffset(offset).setMaxBytes(maxBytes).build()));
+        return call(FileFolderServiceGrpc.newBlockingStub(channel), s -> s.list(ListChildrenRequest.newBuilder().setNodeRef(nodeRef).setSkipCount(skipCount).setMaxItems(maxItems).build()));
     }
 
     /**
-     * Version history of a document, newest first; empty when it is not versionable. Pass the version_ref of a version
-     * to {@link #getContent} or {@link #downloadContent} to read that version.
+     * @param content null to create a folder or an empty document
      */
-    public ListVersionsResponse listVersions(String nodeRef) {
-        return call(s -> s.listVersions(ListVersionsRequest.newBuilder().setNodeRef(nodeRef).build()));
-    }
-
-    /** @param content null to create a folder or an empty document */
     public Node createNode(String parentRef, String name, String type, Map<String, String> properties, Content content) {
         return createNode(parentRef, name, type, properties, Map.of(), List.of(), content);
     }
@@ -115,20 +89,20 @@ public class NodeServiceClient {
      * @param aspects        aspects added before the properties are set (already present ones are ignored)
      * @param content        null to create a folder or an empty document
      */
-    public Node createNode(String parentRef, String name, String type, Map<String, String> properties,
-                           Map<String, List<String>> propertyValues, List<String> aspects, Content content) {
-        val request = CreateNodeRequest.newBuilder().setParentRef(parentRef).setName(name).setType(type)
-                .putAllProperties(properties).putAllPropertyValues(toPropertyValues(propertyValues))
-                .addAllAspects(aspects);
-        if (content != null) request.setContent(content);
-        return call(s -> s.createNode(request.build()));
+    public Node createNode(String parentRef, String name, String type, Map<String, String> properties, Map<String, List<String>> propertyValues, List<String> aspects, Content content) {
+        val request = CreateNodeRequest.newBuilder().setParentRef(parentRef).setName(name).setType(type).putAllProperties(properties).putAllPropertyValues(toPropertyValues(propertyValues)).addAllAspects(aspects);
+        if (content != null)
+            request.setContent(content);
+        return call(FileFolderServiceGrpc.newBlockingStub(channel), s -> s.create(request.build()));
     }
 
     public Node updateNode(String nodeRef, String name, Map<String, String> properties) {
         return updateNode(nodeRef, name, "", properties);
     }
 
-    /** @param type new type (e.g. a cm:content subtype), empty to keep the current one */
+    /**
+     * @param type new type (e.g. a cm:content subtype), empty to keep the current one
+     */
     public Node updateNode(String nodeRef, String name, String type, Map<String, String> properties) {
         return updateNode(nodeRef, name, type, properties, Map.of(), List.of(), List.of());
     }
@@ -139,34 +113,40 @@ public class NodeServiceClient {
      * @param addAspects    aspects to add (already present ones are ignored)
      * @param removeAspects aspects to remove (absent ones are ignored)
      */
-    public Node updateNode(String nodeRef, String name, String type, Map<String, String> properties,
-                           Map<String, List<String>> propertyValues, List<String> addAspects, List<String> removeAspects) {
-        return call(s -> s.updateNode(UpdateNodeRequest.newBuilder().setNodeRef(nodeRef).setName(name).setType(type)
-                .putAllProperties(properties).putAllPropertyValues(toPropertyValues(propertyValues))
-                .addAllAddAspects(addAspects).addAllRemoveAspects(removeAspects).build()));
-    }
-
-    private static Map<String, PropertyValues> toPropertyValues(Map<String, List<String>> values) {
-        return values.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey,
-                e -> PropertyValues.newBuilder().addAllValues(e.getValue()).build()));
-    }
-
-    public Node updateContent(String nodeRef, Content content) {
-        return call(s -> s.updateContent(UpdateContentRequest.newBuilder().setNodeRef(nodeRef).setContent(content).build()));
+    public Node updateNode(String nodeRef, String name, String type, Map<String, String> properties, Map<String, List<String>> propertyValues, List<String> addAspects, List<String> removeAspects) {
+        return call(s -> s.updateNode(UpdateNodeRequest.newBuilder().setNodeRef(nodeRef).setName(name).setType(type).putAllProperties(properties).putAllPropertyValues(toPropertyValues(propertyValues)).addAllAddAspects(addAspects).addAllRemoveAspects(removeAspects).build()));
     }
 
     public Node moveNode(String nodeRef, String targetParentRef, String name) {
-        return call(s -> s.moveNode(MoveNodeRequest.newBuilder().setNodeRef(nodeRef)
-                .setTargetParentRef(targetParentRef).setName(name).build()));
+        return call(FileFolderServiceGrpc.newBlockingStub(channel), s -> s.move(MoveNodeRequest.newBuilder().setNodeRef(nodeRef).setTargetParentRef(targetParentRef).setName(name).build()));
     }
 
     public Node copyNode(String nodeRef, String targetParentRef, String name) {
-        return call(s -> s.copyNode(CopyNodeRequest.newBuilder().setNodeRef(nodeRef)
-                .setTargetParentRef(targetParentRef).setName(name).build()));
+        return call(FileFolderServiceGrpc.newBlockingStub(channel), s -> s.copy(CopyNodeRequest.newBuilder().setNodeRef(nodeRef).setTargetParentRef(targetParentRef).setName(name).build()));
     }
 
     public void deleteNode(String nodeRef) {
         call(s -> s.deleteNode(DeleteNodeRequest.newBuilder().setNodeRef(nodeRef).build()));
+    }
+
+    private static Map<String, PropertyValues> toPropertyValues(Map<String, List<String>> values) {
+        return values.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey, e -> PropertyValues.newBuilder().addAllValues(e.getValue()).build()));
+    }
+
+    /**
+     * Version history of a document, newest first; empty when it is not versionable. Pass the version_ref of a version
+     * to {@link #getContent} or {@link #downloadContent} to read that version.
+     */
+    public ListVersionsResponse listVersions(String nodeRef) {
+        return call(VersionServiceGrpc.newBlockingStub(channel), s -> s.getVersionHistory(ListVersionsRequest.newBuilder().setNodeRef(nodeRef).build()));
+    }
+
+    public GetContentResponse getContent(String nodeRef, boolean text, long offset, int maxBytes) {
+        return call(ContentServiceGrpc.newBlockingStub(channel), s -> s.getReader(GetContentRequest.newBuilder().setNodeRef(nodeRef).setText(text).setOffset(offset).setMaxBytes(maxBytes).build()));
+    }
+
+    public Node updateContent(String nodeRef, Content content) {
+        return call(ContentServiceGrpc.newBlockingStub(channel), s -> s.getWriter(UpdateContentRequest.newBuilder().setNodeRef(nodeRef).setContent(content).build()));
     }
 
     /**
@@ -181,36 +161,43 @@ public class NodeServiceClient {
         val written = new AtomicLong();
         val ticket = tickets.ticket();
         try {
-            return download(authenticated(ticket), request, out, written);
+            return download(authenticated(ContentServiceGrpc.newBlockingStub(channel), ticket), request, out, written);
         } catch (StatusRuntimeException e) {
-            if (e.getStatus().getCode() != Status.Code.UNAUTHENTICATED || written.get() > 0) throw e;
+            if (e.getStatus().getCode() != Status.Code.UNAUTHENTICATED || written.get() > 0)
+                throw e;
             tickets.invalidate(ticket);
             val renewed = tickets.ticket();
-            if (renewed.equals(ticket)) throw e;
-            return download(authenticated(renewed), request, out, written);
+            if (renewed.equals(ticket))
+                throw e;
+            return download(authenticated(ContentServiceGrpc.newBlockingStub(channel), renewed), request, out, written);
         }
     }
 
-    private ContentInfo download(NodeServiceBlockingStub s, DownloadContentRequest request, OutputStream out, AtomicLong written) {
+    private ContentInfo download(ContentServiceGrpc.ContentServiceBlockingStub s, DownloadContentRequest request, OutputStream out, AtomicLong written) {
         ContentInfo info = null;
         val parts = s.downloadContent(request);
         while (parts.hasNext()) {
             val part = parts.next();
-            switch (part.getPartCase()) {
-                case INFO -> info = part.getInfo();
-                case DATA -> {
-                    val data = part.getData();
-                    written.addAndGet(data.size());
-                    try {
-                        data.writeTo(out);
-                    } catch (IOException e) {
-                        throw new UncheckedIOException("Cannot write the downloaded content", e);
+            switch(part.getPartCase()) {
+                case INFO ->
+                    info = part.getInfo();
+                case DATA ->
+                    {
+                        val data = part.getData();
+                        written.addAndGet(data.size());
+                        try {
+                            data.writeTo(out);
+                        } catch (IOException e) {
+                            throw new UncheckedIOException("Cannot write the downloaded content", e);
+                        }
                     }
-                }
-                default -> { }
+                default ->
+                    {
+                    }
             }
         }
-        if (info == null) throw new IllegalStateException("The server sent no content info");
+        if (info == null)
+            throw new IllegalStateException("The server sent no content info");
         return info;
     }
 
@@ -225,14 +212,14 @@ public class NodeServiceClient {
     public Node uploadContent(CreateDocumentHeader header, InputStream data) {
         val ticket = tickets.ticket();
         val upload = new Upload();
-        val sender = NodeServiceGrpc.newStub(channel).withInterceptors(ticketHeader(ticket))
-                .withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS).uploadContent(upload);
+        val sender = ContentServiceGrpc.newStub(channel).withInterceptors(ticketHeader(ticket)).withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS).uploadContent(upload);
         try {
             sender.onNext(UploadContentRequest.newBuilder().setHeader(header).build());
             val buffer = new byte[UPLOAD_CHUNK_SIZE];
             for (int n = data.read(buffer); n != -1 && !upload.response.isDone(); n = data.read(buffer)) {
                 upload.awaitReady();
-                if (upload.response.isDone()) break;
+                if (upload.response.isDone())
+                    break;
                 sender.onNext(UploadContentRequest.newBuilder().setData(ByteString.copyFrom(buffer, 0, n)).build());
             }
             sender.onCompleted();
@@ -248,7 +235,8 @@ public class NodeServiceClient {
             return upload.response.get();
         } catch (ExecutionException e) {
             if (e.getCause() instanceof StatusRuntimeException status) {
-                if (status.getStatus().getCode() == Status.Code.UNAUTHENTICATED) tickets.invalidate(ticket);
+                if (status.getStatus().getCode() == Status.Code.UNAUTHENTICATED)
+                    tickets.invalidate(ticket);
                 throw status;
             }
             throw new IllegalStateException("Upload failed", e.getCause());
@@ -259,35 +247,38 @@ public class NodeServiceClient {
         }
     }
 
-    /** Receives the response of an upload and tells when the call accepts more messages (flow control). */
+    /**
+     * Receives the response of an upload and tells when the call accepts more messages (flow control).
+     */
     private static final class Upload implements ClientResponseObserver<UploadContentRequest, Node> {
+
         final CompletableFuture<Node> response = new CompletableFuture<>();
+
         private final Object ready = new Object();
+
         private ClientCallStreamObserver<UploadContentRequest> requests;
 
-        @Override
-        public void beforeStart(ClientCallStreamObserver<UploadContentRequest> requests) {
+        @Override public void beforeStart(ClientCallStreamObserver<UploadContentRequest> requests) {
             this.requests = requests;
             requests.setOnReadyHandler(this::wake);
         }
 
-        @Override
-        public void onNext(Node value) {
+        @Override public void onNext(Node value) {
             response.complete(value);
         }
 
-        @Override
-        public void onError(Throwable t) {
+        @Override public void onError(Throwable t) {
             response.completeExceptionally(t);
             wake();
         }
 
-        @Override
-        public void onCompleted() {
+        @Override public void onCompleted() {
             wake();
         }
 
-        /** Waits until the call is ready for another message, or has ended. */
+        /**
+         * Waits until the call is ready for another message, or has ended.
+         */
         void awaitReady() throws InterruptedException {
             synchronized (ready) {
                 while (!requests.isReady() && !response.isDone()) ready.wait(100);
@@ -301,22 +292,42 @@ public class NodeServiceClient {
         }
     }
 
+    public SearchResponse search(String query, String language, int skipCount, int maxItems) {
+        return search(query, language, skipCount, maxItems, List.of());
+    }
+
+    /**
+     * @param sort sort criteria, applied in order (afts only); empty to sort by relevance
+     */
+    public SearchResponse search(String query, String language, int skipCount, int maxItems, List<SortField> sort) {
+        return call(SearchServiceGrpc.newBlockingStub(channel), s -> s.query(SearchRequest.newBuilder().setQuery(query).setLanguage(language).setSkipCount(skipCount).setMaxItems(maxItems).addAllSort(sort).build()));
+    }
+
+    public ListModelsResponse listModels(String model, boolean includeProperties) {
+        return call(DictionaryServiceGrpc.newBlockingStub(channel), s -> s.getAllModels(ListModelsRequest.newBuilder().setModel(model).setIncludeProperties(includeProperties).build()));
+    }
+
     private <T> T call(Function<NodeServiceBlockingStub, T> rpc) {
+        return call(stub, rpc);
+    }
+
+    private <S extends AbstractBlockingStub<S>, T> T call(S service, Function<S, T> rpc) {
         val ticket = tickets.ticket();
         try {
-            return rpc.apply(authenticated(ticket));
+            return rpc.apply(authenticated(service, ticket));
         } catch (StatusRuntimeException e) {
-            if (e.getStatus().getCode() != Status.Code.UNAUTHENTICATED) throw e;
+            if (e.getStatus().getCode() != Status.Code.UNAUTHENTICATED)
+                throw e;
             tickets.invalidate(ticket);
             val renewed = tickets.ticket();
-            if (renewed.equals(ticket)) throw e; // the provider cannot renew it: retrying would fail again
-            return rpc.apply(authenticated(renewed));
+            if (renewed.equals(ticket))
+                throw e;
+            return rpc.apply(authenticated(service, renewed));
         }
     }
 
-    private NodeServiceBlockingStub authenticated(String ticket) {
-        return stub.withInterceptors(ticketHeader(ticket))
-                .withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS);
+    private <S extends AbstractBlockingStub<S>> S authenticated(S service, String ticket) {
+        return service.withInterceptors(ticketHeader(ticket)).withDeadlineAfter(deadline.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     private static ClientInterceptor ticketHeader(String ticket) {
