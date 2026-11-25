@@ -55,6 +55,8 @@ service DictionaryService {
 
 // Common: node, properties and their values
 message Node { string node_ref = 1; string name = 2; string type = 3; repeated string aspects = 4; map<string, Property> properties = 5; string parent_ref = 6; }
+// Writes require exactly one scalar (including explicit null) or an explicitly multi-valued list.
+// Cardinality and value kinds must match the repository dictionary; omitted properties are unchanged.
 message Property { repeated PropertyValue values = 1; bool multi_valued = 2; }
 message PropertyValue {
  oneof value {
@@ -64,23 +66,23 @@ message PropertyValue {
  }
 }
 message ContentMetadata { string mimetype = 1; string encoding = 2; int64 size = 3; string locale = 4; }
-message PropertyValues { repeated string values = 1; }
 message Content { bytes data = 1; string mimetype = 2; string encoding = 3; }
 
 // AuthenticationService
 message LoginRequest { string user = 1; string password = 2; }
 message LoginResponse { string ticket = 1; }
 
+// Write requests use typed properties; former text-map/list field numbers are reserved, not reused.
 // NodeService
 message GetNodeRequest { string node_ref = 1; }
-message UpdateNodeRequest { string node_ref = 1; string name = 2; map<string, string> properties = 3; string type = 4; map<string, PropertyValues> property_values = 5; repeated string add_aspects = 6; repeated string remove_aspects = 7; }
+message UpdateNodeRequest { reserved 3, 5; reserved "property_values"; string node_ref = 1; string name = 2; string type = 4; repeated string add_aspects = 6; repeated string remove_aspects = 7; map<string, Property> properties = 8; }
 message DeleteNodeRequest { string node_ref = 1; }
 message DeleteNodeResponse { }
 
 // FileFolderService
 message ListChildrenRequest { string node_ref = 1; int32 skip_count = 2; int32 max_items = 3; }
 message ListChildrenResponse { repeated Node entries = 1; bool has_more_items = 2; int64 total_items = 3; }
-message CreateNodeRequest { string parent_ref = 1; string name = 2; string type = 3; map<string, string> properties = 4; Content content = 5; map<string, PropertyValues> property_values = 6; repeated string aspects = 7; }
+message CreateNodeRequest { reserved 4, 6; reserved "property_values"; string parent_ref = 1; string name = 2; string type = 3; Content content = 5; repeated string aspects = 7; map<string, Property> properties = 8; }
 message MoveNodeRequest { string node_ref = 1; string target_parent_ref = 2; string name = 3; }
 message CopyNodeRequest { string node_ref = 1; string target_parent_ref = 2; string name = 3; }
 
@@ -97,7 +99,7 @@ message DownloadContentResponse { oneof part { ContentInfo info = 1; bytes data 
 message ContentInfo { string mimetype = 1; string encoding = 2; int64 size = 3; }
 message UpdateContentRequest { string node_ref = 1; Content content = 2; }
 message UploadContentRequest { oneof part { CreateDocumentHeader header = 1; bytes data = 2; } }
-message CreateDocumentHeader { string parent_ref = 1; string name = 2; string type = 3; map<string, string> properties = 4; string mimetype = 5; string encoding = 6; map<string, PropertyValues> property_values = 7; repeated string aspects = 8; }
+message CreateDocumentHeader { reserved 4, 7; reserved "property_values"; string parent_ref = 1; string name = 2; string type = 3; string mimetype = 5; string encoding = 6; repeated string aspects = 8; map<string, Property> properties = 9; }
 
 // VersionService
 message ListVersionsRequest { string node_ref = 1; }
@@ -117,7 +119,7 @@ message NodeRefRequest { string node_ref = 1; }
 message NodeProperties { map<string, Property> properties = 1; }
 message NodeType { string type = 1; }
 message NodeAspects { repeated string aspects = 1; }
-message AddPropertiesRequest { string node_ref = 1; map<string, string> properties = 2; map<string, PropertyValues> property_values = 3; }
+message AddPropertiesRequest { reserved 2, 3; reserved "property_values"; string node_ref = 1; map<string, Property> properties = 4; }
 message SetTypeRequest { string node_ref = 1; string type = 2; }
-message AddAspectRequest { string node_ref = 1; string aspect = 2; map<string, string> properties = 3; map<string, PropertyValues> property_values = 4; }
+message AddAspectRequest { reserved 3, 4; reserved "property_values"; string node_ref = 1; string aspect = 2; map<string, Property> properties = 5; }
 message RemoveAspectRequest { string node_ref = 1; string aspect = 2; }

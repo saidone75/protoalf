@@ -87,7 +87,7 @@ public final class GrpcFileFolderService extends FileFolderServiceGrpc.FileFolde
      * @param observer receives one snapshot of the newly created node, or a gRPC error
      */
     @Override public void create(CreateNodeRequest request, StreamObserver<Node> observer) {
-        support.write(observer, () -> mapper.map(writer.create(support.ref(request.getParentRef()), request.getName(), request.getType(), request.getPropertiesMap(), GrpcServiceSupport.values(request.getPropertyValuesMap()), request.getAspectsList(), request.hasContent() ? request.getContent() : null)));
+        support.write(observer, () -> mapper.map(writer.create(support.ref(request.getParentRef()), request.getName(), request.getType(), request.getPropertiesMap(), request.getAspectsList(), request.hasContent() ? request.getContent() : null)));
     }
 
     /**

@@ -73,8 +73,8 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
     }
 
     /**
-     * Merges writable metadata into a node without replacing unrelated properties. Empty input is a no-op. A
-     * property may occur in only one of the scalar and list-valued maps.
+     * Merges writable metadata into a node without replacing unrelated properties. Empty input is a no-op.
+     * Property value kinds and explicit cardinality must match the repository dictionary.
      *
      * @param request node reference and scalar or list-valued properties to merge
      * @param observer receives one updated node snapshot, or a gRPC error
@@ -82,8 +82,8 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
     @Override public void addProperties(AddPropertiesRequest request, StreamObserver<Node> observer) {
         support.write(observer, () -> {
             val ref = support.ref(request.getNodeRef());
-            if (!request.getPropertiesMap().isEmpty() || !request.getPropertyValuesMap().isEmpty()) {
-                writer.update(ref, "", "", request.getPropertiesMap(), GrpcServiceSupport.values(request.getPropertyValuesMap()), List.of(), List.of());
+            if (!request.getPropertiesMap().isEmpty()) {
+                writer.update(ref, "", "", request.getPropertiesMap(), List.of(), List.of());
             }
             return mapper.map(ref);
         });
@@ -136,7 +136,7 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
      * @param observer receives one updated node snapshot, or a gRPC error
      */
     @Override public void addAspect(AddAspectRequest request, StreamObserver<Node> observer) {
-        support.write(observer, () -> mapper.map(writer.update(support.ref(request.getNodeRef()), "", "", request.getPropertiesMap(), GrpcServiceSupport.values(request.getPropertyValuesMap()), List.of(request.getAspect()), List.of())));
+        support.write(observer, () -> mapper.map(writer.update(support.ref(request.getNodeRef()), "", "", request.getPropertiesMap(), List.of(request.getAspect()), List.of())));
     }
 
     /**
@@ -147,7 +147,7 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
      * @param observer receives one updated node snapshot, or a gRPC error
      */
     @Override public void removeAspect(RemoveAspectRequest request, StreamObserver<Node> observer) {
-        support.write(observer, () -> mapper.map(writer.update(support.ref(request.getNodeRef()), "", "", Map.of(), Map.of(), List.of(), List.of(request.getAspect()))));
+        support.write(observer, () -> mapper.map(writer.update(support.ref(request.getNodeRef()), "", "", Map.of(), List.of(), List.of(request.getAspect()))));
     }
 
     /**
@@ -184,6 +184,6 @@ public final class GrpcNodeService extends NodeServiceGrpc.NodeServiceImplBase {
      * @param observer receives one snapshot of the updated node, or a gRPC error
      */
     @Override public void updateNode(UpdateNodeRequest request, StreamObserver<Node> observer) {
-        support.write(observer, () -> mapper.map(writer.update(support.ref(request.getNodeRef()), request.getName(), request.getType(), request.getPropertiesMap(), GrpcServiceSupport.values(request.getPropertyValuesMap()), request.getAddAspectsList(), request.getRemoveAspectsList())));
+        support.write(observer, () -> mapper.map(writer.update(support.ref(request.getNodeRef()), request.getName(), request.getType(), request.getPropertiesMap(), request.getAddAspectsList(), request.getRemoveAspectsList())));
     }
 }

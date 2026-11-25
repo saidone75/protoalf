@@ -14,6 +14,8 @@ import org.saidone.protoalf.api.SearchResponse;
 
 import java.util.Base64;
 import java.util.Map;
+import java.util.HashMap;
+import org.saidone.protoalf.api.Property;
 import java.util.Set;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -38,9 +40,13 @@ final class ToolSupport {
         Folder to list: a nodeRef (workspace://SpacesStore/<id>), a bare node id, \
         or one of the aliases -root- (Company Home), -my- (user home folder), -shared- (Shared Files)""";
     static final String PROPERTIES_PARAM = """
-        Optional metadata as an object of property name -> text value, e.g. \
-        {"cm:title": "Q3 budget", "cm:description": "Draft", "cm:author": "J. Doe"}. \
-        Dates in ISO 8601 (2026-11-02T10:00:00Z). The name is set with 'name', never as cm:name.""";
+        Optional typed metadata keyed by property name, e.g. \
+        {"cm:title":{"multiValued":false,"values":[{"stringValue":"Budget"}]}}. \
+        For lists use multiValued:true and zero or more typed values. Empty lists clear lists; \
+        {"multiValued":false,"values":[{"nullValue":true}]} clears a scalar. Omitted properties are unchanged. \
+        Each value has exactly one field: stringValue, integerValue, doubleValue, booleanValue, \
+        timestampMillis (epoch milliseconds), nodeRefValue or qnameValue. Types and cardinality must \
+        match the dictionary. Set the name with 'name', never as cm:name.""";
 
     static final String TARGET_PARAM = """
         Destination folder: a nodeRef, a bare node id or an alias (-root-, -my-, -shared-)""";
@@ -85,8 +91,14 @@ final class ToolSupport {
         return value == null ? "" : value;
     }
 
-    static Map<String, String> map(Map<String, String> value) {
-        return value == null ? Map.of() : value;
+    static Map<String, Property> map(Map<String, PropertyInput> value) {
+        if (value == null) return Map.of();
+        var result = new HashMap<String, Property>();
+        value.forEach((name, property) -> {
+            if (property == null) throw new AlfrescoToolException("Use an explicit nullValue for " + name);
+            result.put(name, property.toProto());
+        });
+        return result;
     }
 
     static String json(MessageOrBuilder message) {

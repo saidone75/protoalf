@@ -318,7 +318,7 @@ public final class GrpcContentService extends ContentServiceGrpc.ContentServiceI
             Node node = null;
             try {
                 out.close();
-                node = support.transact(user, false, () -> mapper.map(writer.createDocument(support.ref(header.getParentRef()), header.getName(), header.getType(), header.getPropertiesMap(), GrpcServiceSupport.values(header.getPropertyValuesMap()), header.getAspectsList(), header.getMimetype(), header.getEncoding(), spool)));
+                node = support.transact(user, false, () -> mapper.map(writer.createDocument(support.ref(header.getParentRef()), header.getName(), header.getType(), header.getPropertiesMap(), header.getAspectsList(), header.getMimetype(), header.getEncoding(), spool)));
             } catch (IOException e) {
                 log.error("Cannot close the upload spool", e);
                 failure = Status.INTERNAL.withDescription("Upload failed");

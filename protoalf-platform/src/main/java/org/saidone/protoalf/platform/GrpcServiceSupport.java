@@ -20,10 +20,7 @@ import org.alfresco.service.cmr.repository.DuplicateChildNodeNameException;
 import org.alfresco.service.cmr.repository.InvalidNodeRefException;
 import org.alfresco.service.cmr.repository.NodeRef;
 import org.alfresco.service.cmr.repository.StoreRef;
-import org.saidone.protoalf.api.*;
 
-import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -47,18 +44,6 @@ final class GrpcServiceSupport {
      * Repository services used under the caller's transaction and authentication context.
      */
     private final ServiceRegistry services;
-
-    /**
-     * Unwraps Protobuf property-value lists into a Java map without dictionary conversion or validation.
-     *
-     * @param input property names mapped to Protobuf lists
-     * @return a new map preserving each property's ordered text values
-     */
-    static Map<String, List<String>> values(Map<String, PropertyValues> input) {
-        val result = new HashMap<String, List<String>>();
-        input.forEach((name, values) -> result.put(name, values.getValuesList()));
-        return result;
-    }
 
     /**
      * Remote root, current-user home and shared aliases mapped to Alfresco node locators.
