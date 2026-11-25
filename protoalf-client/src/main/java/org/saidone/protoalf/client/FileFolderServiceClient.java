@@ -15,6 +15,8 @@ import java.util.Map;
  * <p>Each call sends the shared provider's Alfresco ticket and a per-call deadline. Unary calls retry once
  * after UNAUTHENTICATED if the provider supplies a different ticket. The caller owns the channel and should
  * share one TicketProvider across service clients.
+ *
+ * <p>Create metadata uses the typed values built with {@link Properties}, with explicit scalar/list cardinality.
  */
 public class FileFolderServiceClient {
 
@@ -68,12 +70,12 @@ public class FileFolderServiceClient {
      * @param parentRef reference or alias of the destination parent folder
      * @param name node name; empty preserves the name on update, move or copy
      * @param type qualified type name; empty preserves the type on update and defaults to cm:content on create
-     * @param properties scalar text properties keyed by qualified name
+     * @param properties typed properties keyed by qualified name
      * @param content document bytes and metadata; optional only on creation
      * @return the resulting node snapshot
      */
-    public Node create(String parentRef, String name, String type, Map<String, String> properties, Content content) {
-        return create(parentRef, name, type, properties, Map.of(), List.of(), content);
+    public Node create(String parentRef, String name, String type, Map<String, Property> properties, Content content) {
+        return create(parentRef, name, type, properties, List.of(), content);
     }
 
     /**
@@ -82,14 +84,13 @@ public class FileFolderServiceClient {
      * @param parentRef reference or alias of the destination parent folder
      * @param name node name; empty preserves the name on update, move or copy
      * @param type qualified type name; empty preserves the type on update and defaults to cm:content on create
-     * @param properties scalar text properties keyed by qualified name
-     * @param propertyValues ordered property value lists; names must not also occur in properties
+     * @param properties typed properties keyed by qualified name
      * @param aspects qualified aspect names to add during creation
      * @param content document bytes and metadata; optional only on creation
      * @return the resulting node snapshot
      */
-    public Node create(String parentRef, String name, String type, Map<String, String> properties, Map<String, List<String>> propertyValues, List<String> aspects, Content content) {
-        val request = CreateNodeRequest.newBuilder().setParentRef(parentRef).setName(name).setType(type).putAllProperties(properties).putAllPropertyValues(ClientCallSupport.toPropertyValues(propertyValues)).addAllAspects(aspects);
+    public Node create(String parentRef, String name, String type, Map<String, Property> properties, List<String> aspects, Content content) {
+        val request = CreateNodeRequest.newBuilder().setParentRef(parentRef).setName(name).setType(type).putAllProperties(properties).addAllAspects(aspects);
         if (content != null)
             request.setContent(content);
         return support.call(stub, s -> s.create(request.build()));

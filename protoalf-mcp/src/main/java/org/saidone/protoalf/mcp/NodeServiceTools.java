@@ -34,7 +34,7 @@ public class NodeServiceTools {
         in the same call. Use alfresco_list_models to find the types and their properties.""")
     public String updateNode(@ToolParam(description = NODE_PARAM) String nodeRef, @ToolParam(description = "New name, omit to keep the current one", required = false) String name, @ToolParam(description = """
         New type, e.g. a custom document type; omit to keep the current one. A document must stay a \
-        cm:content subtype and a folder a cm:folder subtype""", required = false) String type, @ToolParam(description = PROPERTIES_PARAM, required = false) Map<String, String> properties) {
+        cm:content subtype and a folder a cm:folder subtype""", required = false) String type, @ToolParam(description = PROPERTIES_PARAM, required = false) Map<String, PropertyInput> properties) {
         return run(() -> nodes.updateNode(nodeRef, text(name), text(type), map(properties)));
     }
 

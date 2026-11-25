@@ -262,46 +262,46 @@ class ServiceClientsTest {
     }
 
     @Test
-    void createNodeSendsPropertyValuesAndAspects() {
+    void createNodeSendsTypedPropertiesAndAspects() {
         val client = new FileFolderServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
-        val node = client.create("workspace://SpacesStore/parent", "Invoice.pdf", "cm:content", Map.of("cm:title", "Invoice"), Map.of("cm:taggable", List.of("finance", "2026")), List.of("cm:titled"), null);
+        val node = client.create("workspace://SpacesStore/parent", "Invoice.pdf", "cm:content", Map.of("cm:title", Properties.text("Invoice"), "cm:taggable", Properties.texts("finance", "2026")), List.of("cm:titled"), null);
         assertThat(node.getName()).isEqualTo("Invoice.pdf");
         val sent = createRequests.get(0);
-        assertThat(sent.getPropertiesMap()).containsExactly(Map.entry("cm:title", "Invoice"));
-        assertThat(sent.getPropertyValuesMap().get("cm:taggable").getValuesList()).containsExactly("finance", "2026");
+        assertThat(sent.getPropertiesMap()).containsEntry("cm:title", Properties.text("Invoice"));
+        assertThat(sent.getPropertiesMap().get("cm:taggable")).isEqualTo(Properties.texts("finance", "2026"));
         assertThat(sent.getAspectsList()).containsExactly("cm:titled");
     }
 
     @Test
-    void createNodeWithoutPropertyValuesSendsNone() {
+    void createNodePreservesScalarCardinality() {
         val client = new FileFolderServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
-        client.create("workspace://SpacesStore/parent", "Projects", "cm:folder", Map.of("cm:title", "P"), null);
+        client.create("workspace://SpacesStore/parent", "Projects", "cm:folder", Map.of("cm:title", Properties.text("P")), null);
         val sent = createRequests.get(0);
-        assertThat(sent.getPropertyValuesMap()).isEmpty();
+        assertThat(sent.getPropertiesMap()).containsOnlyKeys("cm:title");
         assertThat(sent.getAspectsList()).isEmpty();
         assertThat(sent.hasContent()).isFalse();
     }
 
     @Test
-    void updateNodeSendsPropertyValuesAndAspects() {
+    void updateNodeSendsExplicitEmptyListAndAspects() {
         val client = new NodeServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
-        client.updateNode("workspace://SpacesStore/doc", "", "", Map.of(), Map.of("cm:taggable", List.of()), List.of("cm:taggable"), List.of("cm:titled"));
+        client.updateNode("workspace://SpacesStore/doc", "", "", Map.of("cm:taggable", Properties.texts()), List.of("cm:taggable"), List.of("cm:titled"));
         val sent = updateRequests.get(0);
-        assertThat(sent.getPropertyValuesMap()).containsKey("cm:taggable");
-        assertThat(sent.getPropertyValuesMap().get("cm:taggable").getValuesList()).isEmpty();
+        assertThat(sent.getPropertiesMap()).containsKey("cm:taggable");
+        assertThat(sent.getPropertiesMap().get("cm:taggable").getValuesList()).isEmpty();
         assertThat(sent.getAddAspectsList()).containsExactly("cm:taggable");
         assertThat(sent.getRemoveAspectsList()).containsExactly("cm:titled");
     }
 
     @Test
-    void updateNodeWithoutTheNewArgumentsSendsNone() {
+    void updateNodeWithoutAspectChangesSendsNone() {
         val client = new NodeServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
-        client.updateNode("workspace://SpacesStore/doc", "renamed.txt", Map.of("cm:title", "T"));
+        client.updateNode("workspace://SpacesStore/doc", "renamed.txt", Map.of("cm:title", Properties.text("T")));
         val sent = updateRequests.get(0);
-        assertThat(sent.getPropertyValuesMap()).isEmpty();
+        assertThat(sent.getPropertiesMap()).containsOnlyKeys("cm:title");
         assertThat(sent.getAddAspectsList()).isEmpty();
         assertThat(sent.getRemoveAspectsList()).isEmpty();
-        assertThat(sent.getPropertiesMap()).containsExactly(Map.entry("cm:title", "T"));
+        assertThat(sent.getPropertiesMap()).containsExactly(Map.entry("cm:title", Properties.text("T")));
     }
 
     @Test
@@ -356,15 +356,15 @@ class ServiceClientsTest {
         assertThat(client.getProperties("doc").get("cm:title").getValues(0).getStringValue()).isEqualTo("Budget");
         assertThat(client.getType("doc")).isEqualTo("cm:content");
         assertThat(client.getAspects("doc")).containsExactly("cm:titled");
-        client.addProperties("doc", Map.of("cm:title", "New title"), Map.of("cm:taggable", List.of()));
+        client.addProperties("doc", Map.of("cm:title", Properties.text("New title"), "cm:taggable", Properties.texts()));
         client.setType("doc", "custom:document");
-        client.addAspect("doc", "cm:titled", Map.of(), Map.of("cm:taggable", List.of("finance")));
+        client.addAspect("doc", "cm:titled", Map.of("cm:taggable", Properties.texts("finance")));
         client.removeAspect("doc", "cm:titled");
         client.deleteNode("doc");
         assertThat(nodeRequests).hasSize(5);
-        assertThat(((AddPropertiesRequest) nodeRequests.get(0)).getPropertyValuesOrThrow("cm:taggable").getValuesList()).isEmpty();
+        assertThat(((AddPropertiesRequest) nodeRequests.get(0)).getPropertiesOrThrow("cm:taggable").getValuesList()).isEmpty();
         assertThat(((SetTypeRequest) nodeRequests.get(1)).getType()).isEqualTo("custom:document");
-        assertThat(((AddAspectRequest) nodeRequests.get(2)).getPropertyValuesOrThrow("cm:taggable").getValuesList()).containsExactly("finance");
+        assertThat(((AddAspectRequest) nodeRequests.get(2)).getPropertiesOrThrow("cm:taggable")).isEqualTo(Properties.texts("finance"));
         assertThat(((RemoveAspectRequest) nodeRequests.get(3)).getAspect()).isEqualTo("cm:titled");
         assertThat(((DeleteNodeRequest) nodeRequests.get(4)).getNodeRef()).isEqualTo("doc");
     }

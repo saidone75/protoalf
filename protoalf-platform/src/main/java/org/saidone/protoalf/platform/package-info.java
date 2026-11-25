@@ -23,7 +23,8 @@
  * {@code -my-} and {@code -shared-}. Aliases resolve as the caller. Qualified property, aspect and type names
  * accept {@code prefix:localName} or expanded {@code {namespace-uri}localName} notation. Read snapshots preserve
  * supported scalar types, collection cardinality and null markers, while exposing content metadata without
- * content-store URLs. Write inputs are text values converted according to dictionary definitions.
+ * content-store URLs. Write inputs use the same typed properties, with explicit scalar/list cardinality
+ * validated against dictionary definitions.
  *
  * <h2>Failure delivery</h2>
  * <p>RPC failures are sent to response observers using gRPC statuses; they are not declared as synchronous
