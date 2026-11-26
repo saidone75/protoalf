@@ -8,6 +8,7 @@ import org.saidone.protoalf.bulkexporter.BulkExporter;
 import org.saidone.protoalf.client.ContentServiceClient;
 import org.saidone.protoalf.client.DictionaryServiceClient;
 import org.saidone.protoalf.client.FileFolderServiceClient;
+import org.saidone.protoalf.client.NodeArchiveServiceClient;
 import org.saidone.protoalf.client.NodeServiceClient;
 import org.saidone.protoalf.client.SearchServiceClient;
 import org.saidone.protoalf.client.TicketProvider;
@@ -71,8 +72,18 @@ public class AlfrescoConfiguration {
     }
 
     @Bean
+    NodeArchiveServiceClient nodeArchiveServiceClient(ManagedChannel channel, TicketProvider tickets, AlfrescoProperties properties) {
+        return new NodeArchiveServiceClient(channel, tickets, properties.grpc().deadline());
+    }
+
+    @Bean
     NodeServiceTools nodeServiceTools(NodeServiceClient nodes) {
         return new NodeServiceTools(nodes);
+    }
+
+    @Bean
+    NodeArchiveServiceTools nodeArchiveServiceTools(NodeArchiveServiceClient archive) {
+        return new NodeArchiveServiceTools(archive);
     }
 
     @Bean
@@ -106,9 +117,10 @@ public class AlfrescoConfiguration {
      * Picked up by the Spring AI MCP server auto-configuration and published as MCP tools.
      */
     @Bean
-    ToolCallbackProvider alfrescoToolCallbacks(NodeServiceTools nodes, FileFolderServiceTools files,
-                                               ContentServiceTools contents, SearchServiceTools search,
-                                               DictionaryServiceTools dictionary, ExportTools exportTools) {
-        return MethodToolCallbackProvider.builder().toolObjects(nodes, files, contents, search, dictionary, exportTools).build();
+    ToolCallbackProvider alfrescoToolCallbacks(NodeServiceTools nodes, NodeArchiveServiceTools archive,
+                                               FileFolderServiceTools files, ContentServiceTools contents,
+                                               SearchServiceTools search, DictionaryServiceTools dictionary,
+                                               ExportTools exportTools) {
+        return MethodToolCallbackProvider.builder().toolObjects(nodes, archive, files, contents, search, dictionary, exportTools).build();
     }
 }

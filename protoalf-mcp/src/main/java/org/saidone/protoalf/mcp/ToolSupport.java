@@ -8,6 +8,7 @@ import com.google.protobuf.util.JsonFormat;
 import io.grpc.StatusRuntimeException;
 import lombok.val;
 import org.saidone.protoalf.api.Content;
+import org.saidone.protoalf.api.ListArchivedNodesResponse;
 import org.saidone.protoalf.api.ListChildrenResponse;
 import org.saidone.protoalf.api.PropertyInfo;
 import org.saidone.protoalf.api.SearchResponse;
@@ -30,7 +31,7 @@ final class ToolSupport {
      * and the last page no "hasMoreItems" (false). Paging fields are always printed so the model can rely on
      * them; node fields keep the compact default mapping.
      */
-    private static final JsonFormat.Printer JSON = JsonFormat.printer().omittingInsignificantWhitespace().includingDefaultValueFields(Set.of(field(ListChildrenResponse.getDescriptor(), ListChildrenResponse.ENTRIES_FIELD_NUMBER), field(ListChildrenResponse.getDescriptor(), ListChildrenResponse.HAS_MORE_ITEMS_FIELD_NUMBER), field(ListChildrenResponse.getDescriptor(), ListChildrenResponse.TOTAL_ITEMS_FIELD_NUMBER), field(SearchResponse.getDescriptor(), SearchResponse.ENTRIES_FIELD_NUMBER), field(SearchResponse.getDescriptor(), SearchResponse.HAS_MORE_ITEMS_FIELD_NUMBER), field(SearchResponse.getDescriptor(), SearchResponse.TOTAL_ITEMS_FIELD_NUMBER), field(PropertyInfo.getDescriptor(), PropertyInfo.MANDATORY_FIELD_NUMBER), field(PropertyInfo.getDescriptor(), PropertyInfo.MULTI_VALUED_FIELD_NUMBER), field(PropertyInfo.getDescriptor(), PropertyInfo.READ_ONLY_FIELD_NUMBER)));
+    private static final JsonFormat.Printer JSON = JsonFormat.printer().omittingInsignificantWhitespace().includingDefaultValueFields(Set.of(field(ListChildrenResponse.getDescriptor(), ListChildrenResponse.ENTRIES_FIELD_NUMBER), field(ListChildrenResponse.getDescriptor(), ListChildrenResponse.HAS_MORE_ITEMS_FIELD_NUMBER), field(ListChildrenResponse.getDescriptor(), ListChildrenResponse.TOTAL_ITEMS_FIELD_NUMBER), field(SearchResponse.getDescriptor(), SearchResponse.ENTRIES_FIELD_NUMBER), field(SearchResponse.getDescriptor(), SearchResponse.HAS_MORE_ITEMS_FIELD_NUMBER), field(SearchResponse.getDescriptor(), SearchResponse.TOTAL_ITEMS_FIELD_NUMBER), field(ListArchivedNodesResponse.getDescriptor(), ListArchivedNodesResponse.ENTRIES_FIELD_NUMBER), field(ListArchivedNodesResponse.getDescriptor(), ListArchivedNodesResponse.HAS_MORE_ITEMS_FIELD_NUMBER), field(ListArchivedNodesResponse.getDescriptor(), ListArchivedNodesResponse.TOTAL_ITEMS_FIELD_NUMBER),field(PropertyInfo.getDescriptor(), PropertyInfo.MANDATORY_FIELD_NUMBER), field(PropertyInfo.getDescriptor(), PropertyInfo.MULTI_VALUED_FIELD_NUMBER), field(PropertyInfo.getDescriptor(), PropertyInfo.READ_ONLY_FIELD_NUMBER)));
 
     static final String NODE_PARAM = """
         Node to read: a nodeRef (workspace://SpacesStore/<id>), a bare node id, \
@@ -47,6 +48,9 @@ final class ToolSupport {
         Each value has exactly one field: stringValue, integerValue, doubleValue, booleanValue, \
         timestampMillis (epoch milliseconds), nodeRefValue or qnameValue. Types and cardinality must \
         match the dictionary. Set the name with 'name', never as cm:name.""";
+
+    static final String ARCHIVED_NODE_PARAM = """
+        Node in the trashcan: an archived nodeRef (archive://SpacesStore/<id>) or its bare node id""";
 
     static final String TARGET_PARAM = """
         Destination folder: a nodeRef, a bare node id or an alias (-root-, -my-, -shared-)""";

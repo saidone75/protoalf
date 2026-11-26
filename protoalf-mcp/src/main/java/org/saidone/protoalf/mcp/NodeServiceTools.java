@@ -40,11 +40,13 @@ public class NodeServiceTools {
 
     @Tool(name = "alfresco_delete_node", description = """
         Deletes a document or folder (with all its content) by moving it to the Alfresco trashcan, \
-        from where an administrator can restore it. Ask the user for confirmation before deleting.""")
+        from where an administrator can restore it. A node already in the trashcan (archive://) is \
+        deleted permanently: use alfresco_purge_trashcan_node for that. Ask the user for confirmation \
+        before deleting.""")
     public String deleteNode(@ToolParam(description = NODE_PARAM) String nodeRef) {
         try {
             nodes.deleteNode(nodeRef);
-            return "Deleted %s (moved to the trashcan)".formatted(nodeRef);
+            return (nodeRef.startsWith("archive://") ? "Deleted %s (permanently, it was in the trashcan)" : "Deleted %s (moved to the trashcan)").formatted(nodeRef);
         } catch (StatusRuntimeException e) {
             throw error(e);
         }

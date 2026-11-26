@@ -8,6 +8,8 @@
         <constructor-arg ref="ServiceRegistry"/>
         <!-- Text extraction for GetContent (local transforms, see local.transform.service.enabled) -->
         <constructor-arg ref="synchronousTransformClient"/>
+        <!-- Trashcan listing and purge (NodeArchiveService) -->
+        <constructor-arg ref="nodeArchiveService"/>
         <constructor-arg value="${protoalf.enabled}"/>
         <constructor-arg value="${protoalf.host}"/>
         <constructor-arg value="${protoalf.port}"/>

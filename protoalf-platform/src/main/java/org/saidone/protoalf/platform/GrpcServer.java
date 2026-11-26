@@ -1,16 +1,19 @@
 package org.saidone.protoalf.platform;
 
+import io.grpc.BindableService;
 import io.grpc.Server;
 import io.grpc.ServerInterceptors;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
+import org.alfresco.repo.node.archive.NodeArchiveService;
 import org.alfresco.repo.rendition2.SynchronousTransformClient;
 import org.alfresco.service.ServiceRegistry;
 
 import java.io.File;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
 
@@ -36,6 +39,11 @@ public final class GrpcServer {
      * Optional synchronous transform client passed to the content service.
      */
     private final SynchronousTransformClient transforms;
+
+    /**
+     * Optional node archive service backing the trashcan adapter.
+     */
+    private final NodeArchiveService archive;
 
     /**
      * Whether start is allowed to create a listener.
@@ -75,7 +83,7 @@ public final class GrpcServer {
      * @param privateKey PEM private-key path, or blank for plaintext
      */
     public GrpcServer(ServiceRegistry services, boolean enabled, String host, int port, int threads, int maxMessageSize, String certificate, String privateKey) {
-        this(services, null, enabled, host, port, threads, maxMessageSize, certificate, privateKey);
+        this(services, null, null, enabled, host, port, threads, maxMessageSize, certificate, privateKey);
     }
 
     /**
@@ -83,6 +91,7 @@ public final class GrpcServer {
      *
      * @param services Alfresco service registry; repository work uses its secured services
      * @param transforms synchronous text-transform client, or null to disable non-plain-text extraction
+     * @param archive node archive service, or null to disable the trashcan service
      * @param enabled whether the listener should start when requested
      * @param host bind hostname or IP address; plaintext requires a resolved loopback address
      * @param port TCP port in 1..65535
@@ -91,9 +100,10 @@ public final class GrpcServer {
      * @param certificate PEM certificate path, or blank for plaintext
      * @param privateKey PEM private-key path, or blank for plaintext
      */
-    public GrpcServer(ServiceRegistry services, SynchronousTransformClient transforms, boolean enabled, String host, int port, int threads, int maxMessageSize, String certificate, String privateKey) {
+    public GrpcServer(ServiceRegistry services, SynchronousTransformClient transforms, NodeArchiveService archive, boolean enabled, String host, int port, int threads, int maxMessageSize, String certificate, String privateKey) {
         this.services = services;
         this.transforms = transforms;
+        this.archive = archive;
         this.enabled = enabled;
         this.host = host;
         this.port = port;
@@ -130,7 +140,10 @@ public final class GrpcServer {
             val calls = new CallLoggingInterceptor();
             // Intercepted too: the interceptor lets Authenticate through and rejects anything else without a ticket.
             val builder = NettyServerBuilder.forAddress(new InetSocketAddress(host, port)).executor(executor).maxInboundMessageSize(maxMessageSize).maxConcurrentCallsPerConnection(100);
-            for (val service : List.of(new GrpcAuthenticationService(services.getAuthenticationService()), new GrpcNodeService(services), new GrpcFileFolderService(services), new GrpcContentService(services, transforms), new GrpcVersionService(services), new GrpcSearchService(services), new GrpcDictionaryService(services))) {
+            val adapters = new ArrayList<BindableService>(List.of(new GrpcAuthenticationService(services.getAuthenticationService()), new GrpcNodeService(services), new GrpcFileFolderService(services), new GrpcContentService(services, transforms), new GrpcVersionService(services), new GrpcSearchService(services), new GrpcDictionaryService(services)));
+            if (archive != null)
+                adapters.add(new GrpcNodeArchiveService(services, archive));
+            for (val service : adapters) {
                 // The last interceptor runs first: call logging wraps ticket validation, so rejected calls are logged too.
                 builder.addService(ServerInterceptors.intercept(service, tickets, calls));
             }
