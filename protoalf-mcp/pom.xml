@@ -66,11 +66,6 @@
             <artifactId>protoalf-client</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <dependency>
-            <groupId>org.saidone</groupId>
-            <artifactId>protoalf-bulkexporter</artifactId>
-            <version>${project.version}</version>
-        </dependency>
         <!-- JsonFormat: renders protobuf messages as JSON for the LLM -->
         <dependency>
             <groupId>com.google.protobuf</groupId>

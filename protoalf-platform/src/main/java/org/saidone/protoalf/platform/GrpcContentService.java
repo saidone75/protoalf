@@ -1,6 +1,5 @@
 package org.saidone.protoalf.platform;
 
-import com.google.protobuf.ByteString;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.StreamObserver;
@@ -28,12 +27,15 @@ import java.nio.file.Path;
  * <p>Downloads resolve the reader in a read-only transaction, then stream outside that transaction to avoid
  * duplicate output on transaction retries. Uploads spool bytes to a temporary file and create the document in a
  * retryable read-write transaction only after the client completes. Repository work always runs as the
- * authenticated caller.
+ * authenticated caller. Downloads respect transport readiness and use a dedicated bounded executor. The
+ * owner must call {@link #close()} when disposing a directly constructed adapter.
  *
  * @see ContentService
  */
 @Slf4j
-public final class GrpcContentService extends ContentServiceGrpc.ContentServiceImplBase {
+public final class GrpcContentService extends ContentServiceGrpc.ContentServiceImplBase implements AutoCloseable {
+
+    private final ContentDownloads downloads;
 
     /**
      * Shared caller-context, transaction, reference-resolution and error-mapping helper.
@@ -71,6 +73,11 @@ public final class GrpcContentService extends ContentServiceGrpc.ContentServiceI
      * @param transforms synchronous text-transform client, or null to disable non-plain-text extraction
      */
     public GrpcContentService(ServiceRegistry services, SynchronousTransformClient transforms) {
+        this(services, transforms, 8);
+    }
+
+    GrpcContentService(ServiceRegistry services, SynchronousTransformClient transforms, int downloadConcurrency) {
+        this.downloads = new ContentDownloads(downloadConcurrency);
         this.support = new GrpcServiceSupport(services);
         this.mapper = new NodeMapper(services);
         this.writer = new NodeWriter(services);
@@ -124,7 +131,7 @@ public final class GrpcContentService extends ContentServiceGrpc.ContentServiceI
      *
      * <p>The reader is resolved transactionally as the caller; bytes are emitted afterwards so transaction
      * retries cannot duplicate output. I/O failures yield {@code INTERNAL}; client cancellation stops the
-     * transfer.
+     * transfer. Excess concurrent transfers yield RESOURCE_EXHAUSTED; paused transfers retain their slot.
      *
      * @param request document or frozen-version node reference to download
      * @param observer receives metadata followed by ordered byte chunks, then completion, or a gRPC error
@@ -143,34 +150,12 @@ public final class GrpcContentService extends ContentServiceGrpc.ContentServiceI
             observer.onError(e);
             return;
         }
-        stream(content, observer);
+        downloads.start(content, observer);
     }
 
-    /**
-     * Sends download metadata and stored byte chunks, closing the opened repository stream. Client cancellation
-     * is logged and stops processing; other transfer failures are reported as INTERNAL.
-     *
-     * @param content metadata and optional reader resolved inside the caller transaction
-     * @param observer receives metadata, byte chunks and the terminal outcome
-     */
-    private void stream(ContentFetcher.ContentStream content, StreamObserver<DownloadContentResponse> observer) {
-        try {
-            observer.onNext(DownloadContentResponse.newBuilder().setInfo(content.info).build());
-            if (content.reader != null) {
-                try (val in = content.reader.getContentInputStream()) {
-                    val buffer = new byte[DOWNLOAD_CHUNK_SIZE];
-                    for (int n = in.read(buffer); n != -1; n = in.read(buffer)) observer.onNext(DownloadContentResponse.newBuilder().setData(ByteString.copyFrom(buffer, 0, n)).build());
-                }
-            }
-            observer.onCompleted();
-        } catch (IOException | RuntimeException e) {
-            if (Status.fromThrowable(e).getCode() == Status.Code.CANCELLED) {
-                log.debug("Download cancelled by the client");
-                return;
-            }
-            log.error("Content download failed", e);
-            observer.onError(Status.INTERNAL.withDescription("Content download failed").asRuntimeException());
-        }
+    /** Cancels active transfers and releases the dedicated download executor. */
+    @Override public void close() {
+        downloads.close();
     }
 
     /**

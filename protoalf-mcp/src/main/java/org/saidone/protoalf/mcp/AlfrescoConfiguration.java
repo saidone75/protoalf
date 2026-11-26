@@ -4,7 +4,6 @@ import io.grpc.ManagedChannel;
 import lombok.val;
 import org.saidone.protoalf.client.AlfrescoGrpcChannels;
 import org.saidone.protoalf.client.AuthenticationServiceClient;
-import org.saidone.protoalf.bulkexporter.BulkExporter;
 import org.saidone.protoalf.client.ContentServiceClient;
 import org.saidone.protoalf.client.DictionaryServiceClient;
 import org.saidone.protoalf.client.FileFolderServiceClient;
@@ -106,21 +105,13 @@ public class AlfrescoConfiguration {
         return new DictionaryServiceTools(dictionary);
     }
 
-    /** Export calls use their own, longer deadline while sharing the channel and authenticated ticket provider. */
-    @Bean
-    ExportTools exportTools(ManagedChannel channel, TicketProvider tickets, AlfrescoProperties properties) {
-        val exporter = new BulkExporter(channel, tickets, properties.export().deadline());
-        return new ExportTools(exporter, properties.export().directory());
-    }
-
     /**
      * Picked up by the Spring AI MCP server auto-configuration and published as MCP tools.
      */
     @Bean
     ToolCallbackProvider alfrescoToolCallbacks(NodeServiceTools nodes, NodeArchiveServiceTools archive,
                                                FileFolderServiceTools files, ContentServiceTools contents,
-                                               SearchServiceTools search, DictionaryServiceTools dictionary,
-                                               ExportTools exportTools) {
-        return MethodToolCallbackProvider.builder().toolObjects(nodes, archive, files, contents, search, dictionary, exportTools).build();
+                                               SearchServiceTools search, DictionaryServiceTools dictionary) {
+        return MethodToolCallbackProvider.builder().toolObjects(nodes, archive, files, contents, search, dictionary).build();
     }
 }

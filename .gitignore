@@ -36,6 +36,3 @@ tmp/
 
 # macOS
 *.DS_Store
-# Bulk import exports of the MCP server
-docker/export/
-export/

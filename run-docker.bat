@@ -95,7 +95,7 @@ goto :done
 rem ---------------------------------------------------------------------------
 
 :build
-rem Include the shared client and exporter; examples are not part of the stack.
+rem Include the shared client; examples are not part of the stack.
 call %MVN_EXEC% clean package -pl protoalf-platform,protoalf-mcp -am || exit /b 1
 %COMPOSE% build acs mcp || exit /b 1
 exit /b 0
