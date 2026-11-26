@@ -26,7 +26,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <!-- Shared by both modules: the generated stubs must come from the same protoc/grpc-java versions -->
-        <grpc.version>1.75.0</grpc.version>
+        <grpc.version>1.85.1</grpc.version>
         <protobuf.version>4.36.2</protobuf.version>
         <mockito.version>5.24.0</mockito.version>
         <lombok.version>1.18.48</lombok.version>
