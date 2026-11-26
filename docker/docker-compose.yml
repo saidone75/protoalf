@@ -11,13 +11,6 @@ services:
       - ./grpc-certs.sh:/scripts/grpc-certs.sh:ro
       - grpc-certs:/certs
 
-  # One-shot: makes the bind-mounted export directory writable by the non-root user of the MCP server
-  export-dir:
-    image: alpine:3.22
-    entrypoint: ["chmod", "777", "/export"]
-    volumes:
-      - ./export:/export
-
   acs:
     image: protoalf-acs:development
     build:
@@ -151,16 +144,11 @@ services:
       ALFRESCO_GRPC_HOST: acs
       ALFRESCO_GRPC_PORT: 9090
       ALFRESCO_GRPC_TRUST_CERTIFICATE: /grpc-certs/ca.crt
-      # Bulk import exports (alfresco_export_bulk), on the host in docker/export
-      ALFRESCO_EXPORT_DIRECTORY: /export
     ports:
       - "8090:8090"
     volumes:
-      - ./export:/export
       - grpc-certs:/grpc-certs:ro
     depends_on:
-      export-dir:
-        condition: service_completed_successfully
       certs:
         condition: service_completed_successfully
       acs:

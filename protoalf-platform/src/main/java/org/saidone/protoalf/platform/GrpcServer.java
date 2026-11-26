@@ -22,7 +22,8 @@ import java.util.concurrent.*;
  *
  * <p>The module's Spring context invokes {@link #start} after repository services are available and {@link
  * #stop} during shutdown. One bounded worker pool serves all registered repository adapters. Each adapter uses
- * the same {@link TicketInterceptor}; only credential authentication bypasses the ticket check.
+ * the same {@link TicketInterceptor}; only credential authentication bypasses the ticket check. Content
+ * downloads use a separate bounded pool, with at most one active transfer per configured repository worker.
  *
  * <p>A certificate and private key enable server-side TLS. Plaintext listeners are restricted to loopback
  * addresses. Lifecycle methods are synchronized and repeated start/stop calls are safe.
@@ -64,6 +65,8 @@ public final class GrpcServer {
      * Active listener, or null when stopped or not yet started.
      */
     private Server server;
+
+    private GrpcContentService contentService;
 
     /**
      * Bounded worker pool owned by this listener and released during shutdown.
@@ -136,11 +139,12 @@ public final class GrpcServer {
             throw new IllegalArgumentException("TLS is required for non-loopback gRPC listeners");
         executor = new ThreadPoolExecutor(threads, threads, 0, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1024), new ThreadPoolExecutor.AbortPolicy());
         try {
+            contentService = new GrpcContentService(services, transforms, threads);
             val tickets = new TicketInterceptor(services.getAuthenticationService());
             val calls = new CallLoggingInterceptor();
             // Intercepted too: the interceptor lets Authenticate through and rejects anything else without a ticket.
             val builder = NettyServerBuilder.forAddress(new InetSocketAddress(host, port)).executor(executor).maxInboundMessageSize(maxMessageSize).maxConcurrentCallsPerConnection(100);
-            val adapters = new ArrayList<BindableService>(List.of(new GrpcAuthenticationService(services.getAuthenticationService()), new GrpcNodeService(services), new GrpcFileFolderService(services), new GrpcContentService(services, transforms), new GrpcVersionService(services), new GrpcSearchService(services), new GrpcDictionaryService(services)));
+            val adapters = new ArrayList<BindableService>(List.of(new GrpcAuthenticationService(services.getAuthenticationService()), new GrpcNodeService(services), new GrpcFileFolderService(services), contentService, new GrpcVersionService(services), new GrpcSearchService(services), new GrpcDictionaryService(services)));
             if (archive != null)
                 adapters.add(new GrpcNodeArchiveService(services, archive));
             for (val service : adapters) {
@@ -152,6 +156,10 @@ public final class GrpcServer {
             server = builder.build().start();
             log.info("Alfresco gRPC listening on {}:{} (TLS: {})", host, port, tls);
         } catch (Exception e) {
+            if (contentService != null) {
+                contentService.close();
+                contentService = null;
+            }
             executor.shutdownNow();
             executor = null;
             throw e;
@@ -172,6 +180,10 @@ public final class GrpcServer {
                 server.shutdownNow();
             Thread.currentThread().interrupt();
         } finally {
+            if (contentService != null) {
+                contentService.close();
+                contentService = null;
+            }
             if (executor != null)
                 executor.shutdownNow();
             server = null;

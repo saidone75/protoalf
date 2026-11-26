@@ -41,7 +41,6 @@ jobs:
           path: |
             protoalf-platform/target/protoalf-platform-*.jar
             protoalf-client/target/protoalf-client-*.jar
-            protoalf-bulkexporter/target/protoalf-bulkexporter-*.jar
             protoalf-mcp/target/protoalf-mcp.jar
             protoalf-examples/target/protoalf-examples.jar
             !**/target/*-tests.jar
