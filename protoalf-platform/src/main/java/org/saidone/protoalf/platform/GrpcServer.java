@@ -127,10 +127,12 @@ public final class GrpcServer {
         executor = new ThreadPoolExecutor(threads, threads, 0, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1024), new ThreadPoolExecutor.AbortPolicy());
         try {
             val tickets = new TicketInterceptor(services.getAuthenticationService());
+            val calls = new CallLoggingInterceptor();
             // Intercepted too: the interceptor lets Authenticate through and rejects anything else without a ticket.
             val builder = NettyServerBuilder.forAddress(new InetSocketAddress(host, port)).executor(executor).maxInboundMessageSize(maxMessageSize).maxConcurrentCallsPerConnection(100);
             for (val service : List.of(new GrpcAuthenticationService(services.getAuthenticationService()), new GrpcNodeService(services), new GrpcFileFolderService(services), new GrpcContentService(services, transforms), new GrpcVersionService(services), new GrpcSearchService(services), new GrpcDictionaryService(services))) {
-                builder.addService(ServerInterceptors.intercept(service, tickets));
+                // The last interceptor runs first: call logging wraps ticket validation, so rejected calls are logged too.
+                builder.addService(ServerInterceptors.intercept(service, tickets, calls));
             }
             if (tls)
                 builder.useTransportSecurity(new File(certificate), new File(privateKey));
