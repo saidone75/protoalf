@@ -33,7 +33,7 @@ public class FileFolderServiceTools {
     @Tool(name = "alfresco_create_folder", description = """
         Creates a folder in Alfresco and returns it. Fails with ALREADY_EXISTS if the parent \
         already contains a node with the same name.""")
-    public String createFolder(@ToolParam(description = "Parent folder: a nodeRef, a bare node id or an alias (-root-, -my-, -shared-)") String parentRef, @ToolParam(description = "Folder name") String name, @ToolParam(description = PROPERTIES_PARAM, required = false) Map<String, String> properties) {
+    public String createFolder(@ToolParam(description = "Parent folder: a nodeRef, a bare node id or an alias (-root-, -my-, -shared-)") String parentRef, @ToolParam(description = "Folder name") String name, @ToolParam(description = PROPERTIES_PARAM, required = false) Map<String, PropertyInput> properties) {
         return run(() -> files.create(parentRef, text(name), "cm:folder", map(properties), null));
     }
 
@@ -41,7 +41,7 @@ public class FileFolderServiceTools {
         Creates a document in an Alfresco folder and returns it. Pass text content in 'content', \
         or binary content base64-encoded in 'contentBase64' (not both). The mimetype is guessed from \
         the name extension unless given. Fails with ALREADY_EXISTS if the name is taken.""")
-    public String createDocument(@ToolParam(description = "Parent folder: a nodeRef, a bare node id or an alias (-root-, -my-, -shared-)") String parentRef, @ToolParam(description = "Document name including the extension, e.g. notes.md") String name, @ToolParam(description = "Text content (UTF-8)", required = false) String content, @ToolParam(description = "Binary content encoded in base64", required = false) String contentBase64, @ToolParam(description = "Mimetype, e.g. text/markdown; guessed from the name when omitted", required = false) String mimetype, @ToolParam(description = PROPERTIES_PARAM, required = false) Map<String, String> properties) {
+    public String createDocument(@ToolParam(description = "Parent folder: a nodeRef, a bare node id or an alias (-root-, -my-, -shared-)") String parentRef, @ToolParam(description = "Document name including the extension, e.g. notes.md") String name, @ToolParam(description = "Text content (UTF-8)", required = false) String content, @ToolParam(description = "Binary content encoded in base64", required = false) String contentBase64, @ToolParam(description = "Mimetype, e.g. text/markdown; guessed from the name when omitted", required = false) String mimetype, @ToolParam(description = PROPERTIES_PARAM, required = false) Map<String, PropertyInput> properties) {
         val body = content(content, contentBase64, mimetype, false);
         return run(() -> files.create(parentRef, text(name), "cm:content", map(properties), body));
     }

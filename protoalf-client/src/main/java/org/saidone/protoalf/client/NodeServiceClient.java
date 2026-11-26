@@ -17,6 +17,9 @@ import java.util.Set;
  * <p>Each call sends the shared provider's Alfresco ticket and a per-call deadline. Unary calls retry once
  * after UNAUTHENTICATED if the provider supplies a different ticket. The caller owns the channel and should
  * share one TicketProvider across service clients.
+ *
+ * <p>Writes take one typed property map, built with {@link Properties}. Omitted properties remain unchanged;
+ * scalar/list cardinality and value kinds must match the repository dictionary.
  */
 public class NodeServiceClient {
 
@@ -63,26 +66,14 @@ public class NodeServiceClient {
     }
 
     /**
-     * Merges scalar properties; unrelated metadata remains unchanged.
+     * Merges typed scalar or multi-valued properties.
      *
      * @param nodeRef node reference, bare workspace ID or supported repository alias
-     * @param properties scalar text properties keyed by qualified name
+     * @param properties typed properties keyed by qualified name
      * @return the resulting node snapshot
      */
-    public Node addProperties(String nodeRef, Map<String, String> properties) {
-        return addProperties(nodeRef, properties, Map.of());
-    }
-
-    /**
-     * Merges scalar and explicit-list properties; names must not occur in both maps.
-     *
-     * @param nodeRef node reference, bare workspace ID or supported repository alias
-     * @param properties scalar text properties keyed by qualified name
-     * @param propertyValues ordered property value lists; names must not also occur in properties
-     * @return the resulting node snapshot
-     */
-    public Node addProperties(String nodeRef, Map<String, String> properties, Map<String, List<String>> propertyValues) {
-        val request = AddPropertiesRequest.newBuilder().setNodeRef(nodeRef).putAllProperties(properties).putAllPropertyValues(ClientCallSupport.toPropertyValues(propertyValues)).build();
+    public Node addProperties(String nodeRef, Map<String, Property> properties) {
+        val request = AddPropertiesRequest.newBuilder().setNodeRef(nodeRef).putAllProperties(properties).build();
         return support.call(stub, service -> service.addProperties(request));
     }
 
@@ -119,28 +110,15 @@ public class NodeServiceClient {
     }
 
     /**
-     * Adds a known aspect and optional scalar properties.
+     * Adds an aspect and merges typed properties atomically.
      *
      * @param nodeRef node reference, bare workspace ID or supported repository alias
      * @param aspect qualified name of the aspect to add or remove
-     * @param properties scalar text properties keyed by qualified name
+     * @param properties typed properties keyed by qualified name
      * @return the resulting node snapshot
      */
-    public Node addAspect(String nodeRef, String aspect, Map<String, String> properties) {
-        return addAspect(nodeRef, aspect, properties, Map.of());
-    }
-
-    /**
-     * Adds an aspect and merges scalar/list-valued properties atomically.
-     *
-     * @param nodeRef node reference, bare workspace ID or supported repository alias
-     * @param aspect qualified name of the aspect to add or remove
-     * @param properties scalar text properties keyed by qualified name
-     * @param propertyValues ordered property value lists; names must not also occur in properties
-     * @return the resulting node snapshot
-     */
-    public Node addAspect(String nodeRef, String aspect, Map<String, String> properties, Map<String, List<String>> propertyValues) {
-        val request = AddAspectRequest.newBuilder().setNodeRef(nodeRef).setAspect(aspect).putAllProperties(properties).putAllPropertyValues(ClientCallSupport.toPropertyValues(propertyValues)).build();
+    public Node addAspect(String nodeRef, String aspect, Map<String, Property> properties) {
+        val request = AddAspectRequest.newBuilder().setNodeRef(nodeRef).setAspect(aspect).putAllProperties(properties).build();
         return support.call(stub, service -> service.addAspect(request));
     }
 
@@ -171,10 +149,10 @@ public class NodeServiceClient {
      *
      * @param nodeRef node reference, bare workspace ID or supported repository alias
      * @param name node name; empty preserves the name on update, move or copy
-     * @param properties scalar text properties keyed by qualified name
+     * @param properties typed properties keyed by qualified name
      * @return the resulting node snapshot
      */
-    public Node updateNode(String nodeRef, String name, Map<String, String> properties) {
+    public Node updateNode(String nodeRef, String name, Map<String, Property> properties) {
         return updateNode(nodeRef, name, "", properties);
     }
 
@@ -184,11 +162,11 @@ public class NodeServiceClient {
      * @param nodeRef node reference, bare workspace ID or supported repository alias
      * @param name node name; empty preserves the name on update, move or copy
      * @param type qualified type name; empty preserves the type on update and defaults to cm:content on create
-     * @param properties scalar text properties keyed by qualified name
+     * @param properties typed properties keyed by qualified name
      * @return the resulting node snapshot
      */
-    public Node updateNode(String nodeRef, String name, String type, Map<String, String> properties) {
-        return updateNode(nodeRef, name, type, properties, Map.of(), List.of(), List.of());
+    public Node updateNode(String nodeRef, String name, String type, Map<String, Property> properties) {
+        return updateNode(nodeRef, name, type, properties, List.of(), List.of());
     }
 
     /**
@@ -197,14 +175,13 @@ public class NodeServiceClient {
      * @param nodeRef node reference, bare workspace ID or supported repository alias
      * @param name node name; empty preserves the name on update, move or copy
      * @param type qualified type name; empty preserves the type on update and defaults to cm:content on create
-     * @param properties scalar text properties keyed by qualified name
-     * @param propertyValues ordered property value lists; names must not also occur in properties
+     * @param properties typed properties keyed by qualified name
      * @param addAspects qualified aspect names to add if absent
      * @param removeAspects qualified aspect names to remove if present
      * @return the resulting node snapshot
      */
-    public Node updateNode(String nodeRef, String name, String type, Map<String, String> properties, Map<String, List<String>> propertyValues, List<String> addAspects, List<String> removeAspects) {
-        return support.call(stub, s -> s.updateNode(UpdateNodeRequest.newBuilder().setNodeRef(nodeRef).setName(name).setType(type).putAllProperties(properties).putAllPropertyValues(ClientCallSupport.toPropertyValues(propertyValues)).addAllAddAspects(addAspects).addAllRemoveAspects(removeAspects).build()));
+    public Node updateNode(String nodeRef, String name, String type, Map<String, Property> properties, List<String> addAspects, List<String> removeAspects) {
+        return support.call(stub, s -> s.updateNode(UpdateNodeRequest.newBuilder().setNodeRef(nodeRef).setName(name).setType(type).putAllProperties(properties).addAllAddAspects(addAspects).addAllRemoveAspects(removeAspects).build()));
     }
 
     /**

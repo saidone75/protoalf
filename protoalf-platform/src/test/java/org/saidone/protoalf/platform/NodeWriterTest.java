@@ -26,6 +26,8 @@ import org.alfresco.service.namespace.QName;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.saidone.protoalf.api.Content;
+import org.saidone.protoalf.api.Property;
+import org.saidone.protoalf.api.PropertyValue;
 
 import java.io.InputStream;
 import java.io.Serializable;
@@ -102,7 +104,7 @@ class NodeWriterTest {
         when(files.create(PARENT, "notes.txt", ContentModel.TYPE_CONTENT)).thenReturn(created);
         val contentWriter = mock(ContentWriter.class);
         when(contents.getWriter(CREATED, ContentModel.PROP_CONTENT, true)).thenReturn(contentWriter);
-        val ref = writer.create(PARENT, "notes.txt", "", Map.of("cm:description", "Meeting notes"), Content.newBuilder().setData(ByteString.copyFromUtf8("hello")).build());
+        val ref = writer.create(PARENT, "notes.txt", "", Map.of("cm:description", text("Meeting notes")), Content.newBuilder().setData(ByteString.copyFromUtf8("hello")).build());
         assertEquals(CREATED, ref);
         verify(nodes).addProperties(CREATED, Map.<QName, Serializable>of(DESCRIPTION, "Meeting notes"));
         verify(contentWriter).setMimetype("text/plain");
@@ -121,7 +123,7 @@ class NodeWriterTest {
 
     @Test
     void invalidRequestsAreRejectedBeforeTouchingTheRepository() {
-        val invalidProperties = Map.of("cm:name is set through the name field", Map.of("cm:name", "x"), "protected property", Map.of("cm:created", "2026-01-01T00:00:00Z"), "system property", Map.of("sys:node-uuid", "x"), "unknown property", Map.of("cm:doesNotExist", "x"), "unknown prefix", Map.of("zz:title", "x"), "value of the wrong type", Map.of("cm:from", "not a date"));
+        val invalidProperties = Map.of("cm:name is set through the name field", Map.of("cm:name", text("x")), "protected property", Map.of("cm:created", text("2026-01-01T00:00:00Z")), "system property", Map.of("sys:node-uuid", text("x")), "unknown property", Map.of("cm:doesNotExist", text("x")), "unknown prefix", Map.of("zz:title", text("x")), "value of the wrong type", Map.of("cm:from", text("not a date")));
         invalidProperties.forEach((reason, properties) -> assertThrows(IllegalArgumentException.class, () -> writer.create(PARENT, "notes.txt", "", properties, null), reason));
         assertThrows(IllegalArgumentException.class, () -> writer.create(PARENT, " ", "", Map.of(), null), "blank name");
         assertThrows(IllegalArgumentException.class, () -> writer.create(PARENT, "x".repeat(NodeWriter.MAX_NAME_LENGTH + 1), "", Map.of(), null), "long name");
@@ -132,14 +134,14 @@ class NodeWriterTest {
     }
 
     @Test
-    void datesAreParsedFromIso8601() {
-        val values = writer.properties(Map.of("cm:from", "2026-11-02T10:00:00Z"));
+    void datesUseExplicitTimestamps() {
+        val values = writer.properties(Map.of("cm:from", Property.newBuilder().addValues(PropertyValue.newBuilder().setTimestampMillis(1793613600000L)).build()));
         assertEquals(new Date(1793613600000L), values.get(FROM));
     }
 
     @Test
     void updateRenamesThenSetsProperties() throws Exception {
-        writer.update(CREATED, "renamed.txt", "", Map.of("cm:description", "d"));
+        writer.update(CREATED, "renamed.txt", "", Map.of("cm:description", text("d")));
         val order = inOrder(files, nodes);
         order.verify(files).rename(CREATED, "renamed.txt");
         order.verify(nodes).addProperties(CREATED, Map.<QName, Serializable>of(DESCRIPTION, "d"));
@@ -152,7 +154,7 @@ class NodeWriterTest {
         val invoice = QName.createQName(NamespaceService.CONTENT_MODEL_1_0_URI, "invoice");
         when(dictionary.isSubClass(invoice, ContentModel.TYPE_CONTENT)).thenReturn(true);
         when(nodes.getType(CREATED)).thenReturn(ContentModel.TYPE_CONTENT);
-        writer.update(CREATED, "", "cm:invoice", Map.of("cm:description", "d"));
+        writer.update(CREATED, "", "cm:invoice", Map.of("cm:description", text("d")));
         val order = inOrder(nodes);
         order.verify(nodes).setType(CREATED, invoice);
         order.verify(nodes).addProperties(CREATED, Map.<QName, Serializable>of(DESCRIPTION, "d"));
@@ -206,9 +208,65 @@ class NodeWriterTest {
     }
 
     @Test
-    void multiValuedPropertiesReceiveAList() {
+    void scalarIsNotImplicitlyWrappedAsAList() {
         when(dictionary.getProperty(DESCRIPTION).isMultiValued()).thenReturn(true);
-        assertEquals(List.of("a"), writer.properties(Map.of("cm:description", "a")).get(DESCRIPTION));
+        assertThrows(IllegalArgumentException.class, () -> writer.properties(Map.of("cm:description", text("a"))));
+    }
+
+    private static Property text(String value) {
+        return Property.newBuilder().addValues(PropertyValue.newBuilder().setStringValue(value)).build();
+    }
+
+    private static Property texts(String... values) {
+        val result = Property.newBuilder().setMultiValued(true);
+        for (val value : values) result.addValues(PropertyValue.newBuilder().setStringValue(value));
+        return result.build();
+    }
+
+    @Test
+    void typedValuesAreValidatedAgainstDictionaryTypes() {
+        val cases = Map.of(
+                "java.lang.Integer", PropertyValue.newBuilder().setIntegerValue(12).build(),
+                "java.lang.Long", PropertyValue.newBuilder().setIntegerValue(Long.MAX_VALUE).build(),
+                "java.lang.Float", PropertyValue.newBuilder().setDoubleValue(1.5).build(),
+                "java.lang.Double", PropertyValue.newBuilder().setDoubleValue(2.5).build(),
+                "java.lang.Boolean", PropertyValue.newBuilder().setBooleanValue(false).build(),
+                "org.alfresco.service.cmr.repository.NodeRef", PropertyValue.newBuilder().setNodeRefValue(CREATED.toString()).build(),
+                "org.alfresco.service.namespace.QName", PropertyValue.newBuilder().setQnameValue("cm:content").build());
+        for (val entry : cases.entrySet()) {
+            property(DESCRIPTION, entry.getKey(), false);
+            val input = Property.newBuilder().addValues(entry.getValue()).build();
+            val converted = writer.properties(Map.of("cm:description", input)).get(DESCRIPTION);
+            assertEquals(entry.getKey(), converted.getClass().getName());
+            assertThrows(IllegalArgumentException.class, () -> writer.properties(Map.of("cm:description", text("12"))));
+        }
+    }
+
+    @Test
+    void integerOverflowAndNonFiniteNumbersAreRejected() {
+        property(DESCRIPTION, "java.lang.Integer", false);
+        val overflow = Property.newBuilder().addValues(PropertyValue.newBuilder().setIntegerValue(Long.MAX_VALUE)).build();
+        assertThrows(IllegalArgumentException.class, () -> writer.properties(Map.of("cm:description", overflow)));
+        property(DESCRIPTION, "java.lang.Double", false);
+        val nan = Property.newBuilder().addValues(PropertyValue.newBuilder().setDoubleValue(Double.NaN)).build();
+        assertThrows(IllegalArgumentException.class, () -> writer.properties(Map.of("cm:description", nan)));
+    }
+
+    @Test
+    void malformedValuesAndNullListElementsAreRejected() {
+        val invalidValues = List.of(PropertyValue.getDefaultInstance(),
+                PropertyValue.newBuilder().setNullValue(false).build(),
+                PropertyValue.newBuilder().setContentValue(org.saidone.protoalf.api.ContentMetadata.getDefaultInstance()).build());
+        for (val value : invalidValues) {
+            val input = Property.newBuilder().addValues(value).build();
+            assertThrows(IllegalArgumentException.class, () -> writer.properties(Map.of("cm:description", input)));
+        }
+        when(dictionary.getProperty(DESCRIPTION).isMultiValued()).thenReturn(true);
+        val nullElement = Property.newBuilder().setMultiValued(true).addValues(PropertyValue.newBuilder().setNullValue(true)).build();
+        assertThrows(IllegalArgumentException.class, () -> writer.properties(Map.of("cm:description", nullElement)));
+        val mixed = texts("a").toBuilder().addValues(PropertyValue.newBuilder().setIntegerValue(1)).build();
+        assertThrows(IllegalArgumentException.class, () -> writer.create(PARENT, "notes.txt", "", Map.of("cm:description", mixed), null));
+        verifyNoInteractions(files);
     }
 
     private static final QName TITLED = ContentModel.ASPECT_TITLED;
@@ -219,50 +277,58 @@ class NodeWriterTest {
     }
 
     @Test
-    void singleValuedPropertyRejectsMoreThanOneValue() {
-        assertThrows(IllegalArgumentException.class, () -> writer.create(PARENT, "notes.txt", "", Map.of(), Map.of("cm:description", List.of("a", "b")), List.of(), null));
-        verifyNoInteractions(files);
-        verify(nodes, never()).addProperties(any(), anyMap());
-    }
-
-    @Test
-    void singleValuedPropertyAcceptsZeroOrOneValue() {
-        val created = file(CREATED);
-        when(files.create(PARENT, "notes.txt", ContentModel.TYPE_CONTENT)).thenReturn(created);
-        writer.create(PARENT, "notes.txt", "", Map.of(), Map.of("cm:description", List.of("a")), List.of(), null);
-        verify(nodes).addProperties(CREATED, Map.<QName, Serializable>of(DESCRIPTION, "a"));
-    }
-
-    @Test
-    void aPropertyCannotBeGivenInBothMaps() {
-        assertThrows(IllegalArgumentException.class, () -> writer.create(PARENT, "notes.txt", "", Map.of("cm:description", "a"), Map.of("cm:description", List.of("b")), List.of(), null));
+    void listIsNotImplicitlyUnwrappedAsAScalar() {
+        for (val input : List.of(texts(), texts("a"), texts("a", "b")))
+            assertThrows(IllegalArgumentException.class, () -> writer.create(PARENT, "notes.txt", "", Map.of("cm:description", input), null));
         verifyNoInteractions(files);
     }
 
     @Test
-    void reservedProtectedAndSystemPropertiesAreRejectedInPropertyValues() {
-        for (val key : new String[] { "cm:name", "cm:content", "cm:created", "sys:node-uuid", "cm:doesNotExist" }) assertThrows(IllegalArgumentException.class, () -> writer.create(PARENT, "notes.txt", "", Map.of(), Map.of(key, List.of("x")), List.of(), null), key);
+    void scalarRequiresExactlyOneExplicitValue() {
+        for (val input : List.of(Property.getDefaultInstance(), Property.newBuilder().addAllValues(texts("a", "b").getValuesList()).build()))
+            assertThrows(IllegalArgumentException.class, () -> writer.properties(Map.of("cm:description", input)));
+    }
+
+    @Test
+    void nullClearsAScalarWhileAnOmittedPropertyStaysAbsent() {
+        val nullProperty = Property.newBuilder().addValues(PropertyValue.newBuilder().setNullValue(true)).build();
+        val converted = writer.properties(Map.of("cm:description", nullProperty));
+        assertTrue(converted.containsKey(DESCRIPTION));
+        assertNull(converted.get(DESCRIPTION));
+        assertTrue(writer.properties(Map.of()).isEmpty());
+    }
+
+    @Test
+    void duplicateQualifiedNamesAreRejected() {
+        assertThrows(IllegalArgumentException.class, () -> writer.properties(Map.of("cm:description", text("a"), DESCRIPTION.toString(), text("b"))));
+    }
+
+    @Test
+    void reservedProtectedAndSystemPropertiesAreRejectedInLists() {
+        for (val key : new String[] { "cm:name", "cm:content", "cm:created", "sys:node-uuid", "cm:doesNotExist" })
+            assertThrows(IllegalArgumentException.class, () -> writer.create(PARENT, "notes.txt", "", Map.of(key, texts("x")), null), key);
         verifyNoInteractions(files);
     }
 
     @Test
-    void multiValuedPropertyIsSetAsAList() {
+    void multiValuedPropertyPreservesMultipleSingletonAndEmptyLists() {
         when(dictionary.getProperty(DESCRIPTION).isMultiValued()).thenReturn(true);
         val created = file(CREATED);
         when(files.create(PARENT, "notes.txt", ContentModel.TYPE_CONTENT)).thenReturn(created);
-        writer.create(PARENT, "notes.txt", "", Map.of(), Map.of("cm:description", List.of("a", "b")), List.of(), null);
+        writer.create(PARENT, "notes.txt", "", Map.of("cm:description", texts("a", "b")), List.of(), null);
         verify(nodes).addProperties(CREATED, Map.<QName, Serializable>of(DESCRIPTION, new ArrayList<>(List.of("a", "b"))));
-        writer.update(CREATED, "", "", Map.of(), Map.of("cm:description", List.of()), List.of(), List.of());
+        assertEquals(List.of("a"), writer.properties(Map.of("cm:description", texts("a"))).get(DESCRIPTION));
+        writer.update(CREATED, "", "", Map.of("cm:description", texts()), List.of(), List.of());
         verify(nodes).addProperties(CREATED, Map.<QName, Serializable>of(DESCRIPTION, new ArrayList<>()));
     }
 
     @Test
     void unknownOrSystemAspectsAreRejectedBeforeTouchingTheRepository() {
         aspect(TITLED);
-        assertThrows(IllegalArgumentException.class, () -> writer.create(PARENT, "notes.txt", "", Map.of(), Map.of(), List.of("cm:doesNotExist"), null), "unknown aspect");
-        assertThrows(IllegalArgumentException.class, () -> writer.create(PARENT, "notes.txt", "", Map.of(), Map.of(), List.of("sys:referenceable"), null), "sys aspect");
-        assertThrows(IllegalArgumentException.class, () -> writer.update(CREATED, "", "", Map.of(), Map.of(), List.of("sys:referenceable"), List.of()), "sys aspect on update");
-        assertThrows(IllegalArgumentException.class, () -> writer.update(CREATED, "", "", Map.of(), Map.of(), List.of(), List.of("cm:doesNotExist")), "unknown aspect on remove");
+        assertThrows(IllegalArgumentException.class, () -> writer.create(PARENT, "notes.txt", "", Map.of(), List.of("cm:doesNotExist"), null), "unknown aspect");
+        assertThrows(IllegalArgumentException.class, () -> writer.create(PARENT, "notes.txt", "", Map.of(), List.of("sys:referenceable"), null), "sys aspect");
+        assertThrows(IllegalArgumentException.class, () -> writer.update(CREATED, "", "", Map.of(), List.of("sys:referenceable"), List.of()), "sys aspect on update");
+        assertThrows(IllegalArgumentException.class, () -> writer.update(CREATED, "", "", Map.of(), List.of(), List.of("cm:doesNotExist")), "unknown aspect on remove");
         verifyNoInteractions(files);
         verify(nodes, never()).addAspect(any(), any(), anyMap());
         verify(nodes, never()).removeAspect(any(), any());
@@ -273,13 +339,13 @@ class NodeWriterTest {
         aspect(TITLED);
         val created = file(CREATED);
         when(files.create(PARENT, "notes.txt", ContentModel.TYPE_CONTENT)).thenReturn(created);
-        writer.create(PARENT, "notes.txt", "", Map.of(), Map.of("cm:description", List.of("d")), List.of("cm:titled"), null);
+        writer.create(PARENT, "notes.txt", "", Map.of("cm:description", text("d")), List.of("cm:titled"), null);
         val order = inOrder(nodes);
         order.verify(nodes).addAspect(eq(CREATED), eq(TITLED), anyMap());
         order.verify(nodes).addProperties(CREATED, Map.<QName, Serializable>of(DESCRIPTION, "d"));
         clearInvocations(nodes);
         when(nodes.hasAspect(CREATED, TITLED)).thenReturn(true);
-        writer.update(CREATED, "", "", Map.of(), Map.of(), List.of("cm:titled"), List.of());
+        writer.update(CREATED, "", "", Map.of(), List.of("cm:titled"), List.of());
         verify(nodes, never()).addAspect(any(), any(), anyMap());
     }
 
@@ -289,7 +355,7 @@ class NodeWriterTest {
         when(nodes.hasAspect(CREATED, TITLED)).thenReturn(true);
         val absent = QName.createQName(NamespaceService.CONTENT_MODEL_1_0_URI, "absent");
         aspect(absent);
-        writer.update(CREATED, "renamed.txt", "", Map.of(), Map.of(), List.of(), List.of("cm:titled", "cm:absent"));
+        writer.update(CREATED, "renamed.txt", "", Map.of(), List.of(), List.of("cm:titled", "cm:absent"));
         val order = inOrder(files, nodes);
         order.verify(files).rename(CREATED, "renamed.txt");
         order.verify(nodes).removeAspect(CREATED, TITLED);

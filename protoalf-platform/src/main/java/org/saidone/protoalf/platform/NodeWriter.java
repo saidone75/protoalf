@@ -18,6 +18,8 @@ import org.alfresco.service.namespace.NamespaceException;
 import org.alfresco.service.namespace.NamespaceService;
 import org.alfresco.service.namespace.QName;
 import org.saidone.protoalf.api.Content;
+import org.saidone.protoalf.api.Property;
+import org.saidone.protoalf.api.PropertyValue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,7 +27,7 @@ import java.io.Serializable;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collection;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,8 +43,8 @@ import java.util.stream.Collectors;
  * constraints.
  *
  * <p>Writes support document and folder types, known non-system aspects and writable dictionary properties.
- * Names and content use dedicated request fields. Text property values are converted to the dictionary's Java
- * types; protected, reserved and system properties are rejected before mutation where possible.
+ * Names and content use dedicated request fields. Typed property values must match dictionary cardinality
+ * and datatypes; protected, reserved and system properties are rejected before mutation where possible.
  *
  * <p>Uploads backed by a file reopen the input stream for each transaction attempt. This is essential when
  * Alfresco retries creation after the bytes have already been received.
@@ -72,13 +74,13 @@ final class NodeWriter {
      * @param parent destination parent folder
      * @param name required non-blank node name, at most MAX_NAME_LENGTH characters
      * @param type qualified document/folder type; blank defaults to cm:content
-     * @param properties scalar text property values keyed by qualified name
+     * @param properties typed scalar or multi-valued properties keyed by qualified name
      * @param content document bytes and metadata; null is allowed only for creation without content
      * @return the created node reference
      * @throws IllegalArgumentException if input validation fails or the requested operation is unsupported
      */
-    NodeRef create(NodeRef parent, String name, String type, Map<String, String> properties, Content content) {
-        return create(parent, name, type, properties, Map.of(), List.of(), content);
+    NodeRef create(NodeRef parent, String name, String type, Map<String, Property> properties, Content content) {
+        return create(parent, name, type, properties, List.of(), content);
     }
 
     /**
@@ -88,20 +90,19 @@ final class NodeWriter {
      * @param parent destination parent folder
      * @param name required non-blank node name, at most MAX_NAME_LENGTH characters
      * @param type qualified document/folder type; blank defaults to cm:content
-     * @param properties scalar text property values keyed by qualified name
-     * @param propertyValues list-valued text properties; a property must not occur in both maps
+     * @param properties typed scalar or multi-valued properties keyed by qualified name
      * @param aspects known non-system aspects to add before setting metadata
      * @param content document bytes and metadata; null is allowed only for creation without content
      * @return the created node reference
      * @throws IllegalArgumentException if input validation fails or the requested operation is unsupported
      */
-    NodeRef create(NodeRef parent, String name, String type, Map<String, String> properties, Map<String, List<String>> propertyValues, List<String> aspects, Content content) {
+    NodeRef create(NodeRef parent, String name, String type, Map<String, Property> properties, List<String> aspects, Content content) {
         val typeName = type.isBlank() ? ContentModel.TYPE_CONTENT : fileType(type);
         val folder = isFolder(typeName);
         if (folder && content != null)
             throw new IllegalArgumentException("A folder has no content");
         // Validate everything before touching the repository.
-        val values = values(properties, propertyValues);
+        val values = properties(properties);
         val aspectNames = aspects(aspects);
         val ref = services.getFileFolderService().create(parent, name(name), typeName).getNodeRef();
         addAspects(ref, aspectNames);
@@ -120,12 +121,12 @@ final class NodeWriter {
      * @param ref existing node to mutate in the caller transaction
      * @param name new node name, or the empty string to preserve the existing name
      * @param type new qualified type, or the empty string to preserve the existing type
-     * @param properties scalar text property values keyed by qualified name
+     * @param properties typed scalar or multi-valued properties keyed by qualified name
      * @return the updated node reference
      * @throws IllegalArgumentException if input validation fails or the requested operation is unsupported
      */
-    NodeRef update(NodeRef ref, String name, String type, Map<String, String> properties) {
-        return update(ref, name, type, properties, Map.of(), List.of(), List.of());
+    NodeRef update(NodeRef ref, String name, String type, Map<String, Property> properties) {
+        return update(ref, name, type, properties, List.of(), List.of());
     }
 
     /**
@@ -136,20 +137,19 @@ final class NodeWriter {
      * @param ref existing node to mutate in the caller transaction
      * @param name new node name, or the empty string to preserve the existing name
      * @param type new qualified type, or the empty string to preserve the existing type
-     * @param properties scalar text property values keyed by qualified name
-     * @param propertyValues list-valued text properties; a property must not occur in both maps
+     * @param properties typed scalar or multi-valued properties keyed by qualified name
      * @param addAspects known non-system aspects to add if absent
      * @param removeAspects known non-system aspects to remove if present
      * @return the updated node reference
      * @throws IllegalArgumentException if input validation fails or the requested operation is unsupported
      */
-    NodeRef update(NodeRef ref, String name, String type, Map<String, String> properties, Map<String, List<String>> propertyValues, List<String> addAspects, List<String> removeAspects) {
-        if (name.isEmpty() && type.isEmpty() && properties.isEmpty() && propertyValues.isEmpty() && addAspects.isEmpty() && removeAspects.isEmpty())
-            throw new IllegalArgumentException("Nothing to update: set name, type, properties, property_values, add_aspects and/or remove_aspects");
+    NodeRef update(NodeRef ref, String name, String type, Map<String, Property> properties, List<String> addAspects, List<String> removeAspects) {
+        if (name.isEmpty() && type.isEmpty() && properties.isEmpty() && addAspects.isEmpty() && removeAspects.isEmpty())
+            throw new IllegalArgumentException("Nothing to update: set name, type, properties, add_aspects and/or remove_aspects");
         val typeName = type.isEmpty() ? null : fileType(type);
         if (typeName != null && isFolder(typeName) != isFolder(services.getNodeService().getType(ref)))
             throw new IllegalArgumentException("A document cannot become a folder, nor a folder a document");
-        val values = values(properties, propertyValues);
+        val values = properties(properties);
         val toAdd = aspects(addAspects);
         val toRemove = aspects(removeAspects);
         if (!name.isEmpty())
@@ -225,8 +225,7 @@ final class NodeWriter {
      * @param parent destination parent folder
      * @param name required non-blank node name, at most MAX_NAME_LENGTH characters
      * @param type qualified document subtype; blank defaults to cm:content
-     * @param properties scalar text property values keyed by qualified name
-     * @param propertyValues list-valued text properties; a property must not occur in both maps
+     * @param properties typed scalar or multi-valued properties keyed by qualified name
      * @param aspects known non-system aspects to add before setting metadata
      * @param mimetype MIME type, or blank to infer it from the filename
      * @param encoding character encoding, or blank for UTF-8
@@ -235,11 +234,11 @@ final class NodeWriter {
      * @throws IllegalArgumentException if input validation fails or the requested operation is unsupported
      * @throws ContentIOException if the source content cannot be opened or read
      */
-    NodeRef createDocument(NodeRef parent, String name, String type, Map<String, String> properties, Map<String, List<String>> propertyValues, List<String> aspects, String mimetype, String encoding, Path file) {
+    NodeRef createDocument(NodeRef parent, String name, String type, Map<String, Property> properties, List<String> aspects, String mimetype, String encoding, Path file) {
         val typeName = type.isBlank() ? ContentModel.TYPE_CONTENT : fileType(type);
         if (isFolder(typeName))
             throw new IllegalArgumentException("type must be cm:content or one of its subtypes");
-        val values = values(properties, propertyValues);
+        val values = properties(properties);
         val aspectNames = aspects(aspects);
         val ref = services.getFileFolderService().create(parent, name(name), typeName).getNodeRef();
         addAspects(ref, aspectNames);
@@ -356,67 +355,30 @@ final class NodeWriter {
         return result;
     }
 
-    /**
-     * Converts scalar text values to dictionary types and wraps values in collections for multi-valued
-     * properties.
-     *
-     * @param input qualified property names mapped to scalar text values
-     * @return converted properties ready for repository mutation
-     * @throws IllegalArgumentException if a property is not writable or a value cannot be converted
-     */
-    Map<QName, Serializable> properties(Map<String, String> input) {
+    /** Validates explicit cardinality and converts typed values using the repository dictionary. */
+    Map<QName, Serializable> properties(Map<String, Property> input) {
         val result = new HashMap<QName, Serializable>();
-        input.forEach((key, value) -> {
+        input.forEach((key, property) -> {
             val name = qname(key);
             val definition = writable(key, name);
-            val converted = convert(key, definition, value);
-            result.put(name, definition.isMultiValued() && !(converted instanceof Collection<?>) ? new ArrayList<>(List.of(converted)) : converted);
-        });
-        return result;
-    }
-
-    /**
-     * Converts explicit value lists according to dictionary cardinality. Multi-valued properties accept any
-     * list; single-valued properties accept zero or one value. Empty single-valued lists become null, while
-     * empty multi-valued lists remain empty collections.
-     *
-     * @param input qualified property names mapped to ordered text value lists
-     * @return typed scalar or collection values ready for repository mutation
-     * @throws IllegalArgumentException if a property is not writable, a value is invalid or a scalar receives
-     *     multiple values
-     */
-    Map<QName, Serializable> propertyValues(Map<String, List<String>> input) {
-        val result = new HashMap<QName, Serializable>();
-        input.forEach((key, values) -> {
-            val name = qname(key);
-            val definition = writable(key, name);
-            if (definition.isMultiValued()) {
-                val converted = new ArrayList<Serializable>();
-                for (val value : values) converted.add(convert(key, definition, value));
-                result.put(name, converted);
+            if (result.containsKey(name))
+                throw new IllegalArgumentException("Duplicate qualified property " + key);
+            if (property.getMultiValued() != definition.isMultiValued())
+                throw new IllegalArgumentException(key + " cardinality does not match the dictionary");
+            if (property.getMultiValued()) {
+                val values = new ArrayList<Serializable>();
+                for (val value : property.getValuesList()) {
+                    if (value.getValueCase() == PropertyValue.ValueCase.NULL_VALUE)
+                        throw new IllegalArgumentException(key + " lists cannot contain null; use an empty list to clear");
+                    values.add(convert(key, definition, value));
+                }
+                result.put(name, values);
             } else {
-                if (values.size() > 1)
-                    throw new IllegalArgumentException(String.format("%s is single-valued: give at most one value", key));
-                result.put(name, values.isEmpty() ? null : convert(key, definition, values.get(0)));
+                if (property.getValuesCount() != 1)
+                    throw new IllegalArgumentException(key + " requires exactly one scalar value or explicit null");
+                result.put(name, convert(key, definition, property.getValues(0)));
             }
         });
-        return result;
-    }
-
-    /**
-     * Converts and merges scalar and explicit-list property inputs, rejecting duplicate qualified names even
-     * when expressed with different name notation.
-     *
-     * @param properties scalar text properties
-     * @param propertyValues explicit text value lists
-     * @return one validated typed property map
-     * @throws IllegalArgumentException if conversion fails or a qualified property occurs in both maps
-     */
-    private Map<QName, Serializable> values(Map<String, String> properties, Map<String, List<String>> propertyValues) {
-        val result = properties(properties);
-        for (val key : propertyValues.keySet()) if (result.containsKey(qname(key)))
-            throw new IllegalArgumentException(String.format("%s is set in both properties and property_values", key));
-        result.putAll(propertyValues(propertyValues));
         return result;
     }
 
@@ -440,21 +402,55 @@ final class NodeWriter {
         return definition;
     }
 
-    /**
-     * Converts one text value with Alfresco's default type converter and reports invalid input without exposing
-     * converter internals.
-     *
-     * @param key input property name for diagnostics
-     * @param definition dictionary definition providing the destination datatype
-     * @param value text value to convert
-     * @return the serializable typed repository value
-     * @throws IllegalArgumentException if the value does not match the dictionary datatype
-     */
-    private static Serializable convert(String key, PropertyDefinition definition, String value) {
+    /** Decodes one explicit value, rejecting implicit string/numeric/boolean/date conversions. */
+    private Serializable convert(String key, PropertyDefinition definition, PropertyValue value) {
+        val javaType = definition.getDataType().getJavaClassName();
+        Object decoded;
+        boolean compatible;
+        switch (value.getValueCase()) {
+            case STRING_VALUE:
+                decoded = value.getStringValue();
+                compatible = javaType.equals("java.lang.String") || javaType.equals("org.alfresco.service.cmr.repository.MLText");
+                break;
+            case INTEGER_VALUE:
+                val number = value.getIntegerValue();
+                decoded = number;
+                compatible = javaType.equals("java.lang.Long") || (javaType.equals("java.lang.Integer") && number >= Integer.MIN_VALUE && number <= Integer.MAX_VALUE);
+                break;
+            case DOUBLE_VALUE:
+                val numberDouble = value.getDoubleValue();
+                decoded = numberDouble;
+                compatible = Double.isFinite(numberDouble) && (javaType.equals("java.lang.Double") || (javaType.equals("java.lang.Float") && Math.abs(numberDouble) <= Float.MAX_VALUE));
+                break;
+            case BOOLEAN_VALUE:
+                decoded = value.getBooleanValue();
+                compatible = javaType.equals("java.lang.Boolean");
+                break;
+            case TIMESTAMP_MILLIS:
+                decoded = new Date(value.getTimestampMillis());
+                compatible = javaType.equals("java.util.Date");
+                break;
+            case NODE_REF_VALUE:
+                decoded = new NodeRef(value.getNodeRefValue());
+                compatible = javaType.equals(NodeRef.class.getName());
+                break;
+            case QNAME_VALUE:
+                decoded = qname(value.getQnameValue());
+                compatible = javaType.equals(QName.class.getName());
+                break;
+            case NULL_VALUE:
+                if (!value.getNullValue())
+                    throw new IllegalArgumentException(key + " null_value must be true");
+                return null;
+            default:
+                throw new IllegalArgumentException("Unsupported or missing value for " + key);
+        }
+        if (!compatible)
+            throw new IllegalArgumentException("Invalid value kind for " + key + " (expected " + javaType + ")");
         try {
-            return (Serializable) DefaultTypeConverter.INSTANCE.convert(definition.getDataType(), value);
+            return (Serializable) DefaultTypeConverter.INSTANCE.convert(definition.getDataType(), decoded);
         } catch (TypeConversionException e) {
-            throw new IllegalArgumentException(String.format("Invalid value for %s (type %s): %s", key, definition.getDataType().getName().getLocalName(), value));
+            throw new IllegalArgumentException("Invalid value for " + key + " (expected " + javaType + ")", e);
         }
     }
 

@@ -554,7 +554,7 @@ class GrpcRepositoryServiceTest {
         val added = new Result<Node>();
         val removed = new Result<Node>();
         Context.current().withValue(TicketInterceptor.USER, "writer").run(() -> {
-            service.addProperties(AddPropertiesRequest.newBuilder().setNodeRef("doc").putProperties("cm:title", "Budget").build(), properties);
+            service.addProperties(AddPropertiesRequest.newBuilder().setNodeRef("doc").putProperties("cm:title", Property.newBuilder().addValues(PropertyValue.newBuilder().setStringValue("Budget")).build()).build(), properties);
             service.setType(SetTypeRequest.newBuilder().setNodeRef("doc").setType("cm:folder").build(), type);
             service.addAspect(AddAspectRequest.newBuilder().setNodeRef("doc").setAspect("cm:titled").build(), added);
             when(services.getNodeService().hasAspect(ref, ContentModel.ASPECT_TITLED)).thenReturn(true);

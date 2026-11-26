@@ -8,14 +8,10 @@ import io.grpc.stub.AbstractStub;
 import io.grpc.stub.MetadataUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.val;
-import org.saidone.protoalf.api.PropertyValues;
 
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 
 /** Shared ticket attachment, deadline handling and single-renewal retry for repository service clients. */
 @RequiredArgsConstructor
@@ -52,12 +48,6 @@ final class ClientCallSupport {
 
     void invalidate(String expired) {
         tickets.invalidate(expired);
-    }
-
-    /** Converts explicit text lists without losing empty lists used to clear a property. */
-    static Map<String, PropertyValues> toPropertyValues(Map<String, List<String>> values) {
-        return values.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey,
-                entry -> PropertyValues.newBuilder().addAllValues(entry.getValue()).build()));
     }
 
     private static ClientInterceptor ticketHeader(String ticket) {

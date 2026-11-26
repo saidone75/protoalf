@@ -139,7 +139,8 @@ class ContentServiceClientTest {
                 closed = true;
             }
         };
-        val header = CreateDocumentHeader.newBuilder().setParentRef("folder").setName("upload.bin").build();
+        val header = CreateDocumentHeader.newBuilder().setParentRef("folder").setName("upload.bin").putProperties("cm:title", Properties.text("Upload"))
+                .putProperties("my:amounts", Properties.integers(1, 2)).build();
         assertThat(client.uploadContent(header, input).getName()).isEqualTo("upload.bin");
         assertThat(input.closed).isFalse();
         assertThat(uploaded.get(0).getHeader()).isEqualTo(header);
