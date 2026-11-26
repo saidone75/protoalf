@@ -3,7 +3,8 @@
  *
  * <h2>Service boundaries</h2>
  * <p>Each {@code Grpc<Service>} corresponds to an Alfresco service: node metadata, file/folder operations,
- * content, version history, search, dictionary lookups and credential authentication. Protobuf messages
+ * content, version history, search, dictionary lookups, the trashcan (archive store) and credential
+ * authentication. Protobuf messages
  * replace local repository objects. Aggregate node snapshots and updates, materialized content access and
  * streaming transfers are documented remote extensions rather than implementations of Alfresco Java interfaces.
  *

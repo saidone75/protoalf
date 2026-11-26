@@ -23,6 +23,13 @@ service NodeService {
  rpc UpdateNode(UpdateNodeRequest) returns (Node);
 }
 
+service NodeArchiveService {
+ rpc ListArchivedNodes(ListArchivedNodesRequest) returns (ListArchivedNodesResponse);
+ rpc PurgeArchivedNode(PurgeArchivedNodeRequest) returns (PurgeArchivedNodesResponse);
+ // Purges every archived node the caller can list (all of them for an administrator).
+ rpc PurgeAllArchivedNodes(PurgeAllArchivedNodesRequest) returns (PurgeArchivedNodesResponse);
+}
+
 service FileFolderService {
  rpc List(ListChildrenRequest) returns (ListChildrenResponse);
  rpc Create(CreateNodeRequest) returns (Node);
@@ -78,6 +85,13 @@ message GetNodeRequest { string node_ref = 1; }
 message UpdateNodeRequest { reserved 3, 5; reserved "property_values"; string node_ref = 1; string name = 2; string type = 4; repeated string add_aspects = 6; repeated string remove_aspects = 7; map<string, Property> properties = 8; }
 message DeleteNodeRequest { string node_ref = 1; }
 message DeleteNodeResponse { }
+
+// NodeArchiveService
+message ListArchivedNodesRequest { string filter = 1; int32 skip_count = 2; int32 max_items = 3; }
+message ListArchivedNodesResponse { repeated Node entries = 1; bool has_more_items = 2; int64 total_items = 3; }
+message PurgeArchivedNodeRequest { string node_ref = 1; }
+message PurgeAllArchivedNodesRequest { }
+message PurgeArchivedNodesResponse { int64 purged = 1; }
 
 // FileFolderService
 message ListChildrenRequest { string node_ref = 1; int32 skip_count = 2; int32 max_items = 3; }
