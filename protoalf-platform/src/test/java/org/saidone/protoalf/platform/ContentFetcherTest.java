@@ -21,6 +21,7 @@ import org.saidone.protoalf.api.GetContentResponse;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -125,6 +126,105 @@ class ContentFetcherTest {
         val next = fetcher.read(DOC, true, first.getContent().getData().size(), 2);
         assertEquals("è", next.getContent().getData().toStringUtf8());
         assertTrue(next.getHasMore());
+    }
+
+    @Test
+    void limitsSmallerThanTheFirstCharacterAreRejectedWithoutReturningPartialBytes() {
+        for (val character : new String[] { "è", "€", "😀" }) {
+            val bytes = character.getBytes(StandardCharsets.UTF_8);
+            for (val suffix : new String[] { "", "tail" }) {
+                stored((character + suffix).getBytes(StandardCharsets.UTF_8), "text/plain", "UTF-8");
+                for (int limit = 1; limit < bytes.length; limit++) {
+                    val requestedLimit = limit;
+                    val error = assertThrows(IllegalArgumentException.class, () -> fetcher.read(DOC, true, 0, requestedLimit));
+                    assertTrue(error.getMessage().contains("max_bytes"));
+                }
+                val response = fetcher.read(DOC, true, 0, bytes.length);
+                assertArrayEquals(bytes, response.getContent().getData().toByteArray());
+                assertEquals(!suffix.isEmpty(), response.getHasMore());
+            }
+        }
+    }
+
+    @Test
+    void offsetsInsideUtf8CharactersAreRejectedEvenOnTheLastByte() {
+        for (val character : new String[] { "è", "€", "😀" }) {
+            val text = "a" + character;
+            stored(text.getBytes(StandardCharsets.UTF_8), "text/plain", "UTF-8");
+            for (int offset = 2; offset < text.getBytes(StandardCharsets.UTF_8).length; offset++) {
+                val requestedOffset = offset;
+                for (val limit : new int[] { 1, 4, 10 }) {
+                    val error = assertThrows(IllegalArgumentException.class, () -> fetcher.read(DOC, true, requestedOffset, limit));
+                    assertTrue(error.getMessage().contains("offset"));
+                }
+            }
+        }
+    }
+
+    @Test
+    void pagedTextPreservesAllBytesAndAdvancesAcrossAccentsAndEmoji() {
+        val text = "aè€😀zé🌍fine";
+        val bytes = text.getBytes(StandardCharsets.UTF_8);
+        stored(bytes, "text/plain", "UTF-8");
+        for (int limit = 4; limit <= bytes.length + 1; limit++) {
+            val assembled = new ByteArrayOutputStream();
+            long offset = 0;
+            boolean more;
+            do {
+                val response = fetcher.read(DOC, true, offset, limit);
+                val data = response.getContent().getData();
+                assertTrue(data.isValidUtf8());
+                assertFalse(data.isEmpty(), "A continuation must make progress");
+                assertTrue(data.size() <= limit);
+                assertEquals(bytes.length, response.getSize());
+                assembled.writeBytes(data.toByteArray());
+                offset += data.size();
+                more = response.getHasMore();
+                assertEquals(offset < bytes.length, more);
+            } while (more);
+            assertArrayEquals(bytes, assembled.toByteArray());
+        }
+    }
+
+    @Test
+    void arbitraryAlignedOffsetsRespectSmallLimitsAndEof() {
+        val text = "aè€😀z";
+        val bytes = text.getBytes(StandardCharsets.UTF_8);
+        stored(bytes, "text/plain", "UTF-8");
+        for (val boundary : new int[][] { { 0, 1 }, { 1, 2 }, { 3, 3 }, { 6, 4 }, { 10, 1 }, { 11, 0 }, { 20, 0 } }) {
+            val offset = boundary[0];
+            for (int limit = 1; limit <= 5; limit++) {
+                val requestedLimit = limit;
+                val characterBytes = boundary[1];
+                if (characterBytes > limit) {
+                    assertThrows(IllegalArgumentException.class, () -> fetcher.read(DOC, true, offset, requestedLimit));
+                    continue;
+                }
+                val response = fetcher.read(DOC, true, offset, limit);
+                val data = response.getContent().getData();
+                assertTrue(data.isValidUtf8());
+                assertTrue(data.size() <= limit);
+                if (offset >= bytes.length) {
+                    assertTrue(data.isEmpty());
+                    assertFalse(response.getHasMore());
+                } else {
+                    assertFalse(data.isEmpty());
+                    assertArrayEquals(Arrays.copyOfRange(bytes, offset, offset + data.size()), data.toByteArray());
+                    assertEquals(offset + data.size() < bytes.length, response.getHasMore());
+                }
+            }
+        }
+    }
+
+    @Test
+    void binarySlicesAllowOffsetsAndLimitsInsideUtf8Sequences() {
+        val bytes = "😀è".getBytes(StandardCharsets.UTF_8);
+        stored(bytes, "text/plain", "UTF-8");
+        for (int offset = 0; offset < bytes.length; offset++) {
+            val response = fetcher.read(DOC, false, offset, 1);
+            assertArrayEquals(new byte[] { bytes[offset] }, response.getContent().getData().toByteArray());
+            assertEquals(offset + 1 < bytes.length, response.getHasMore());
+        }
     }
 
     @Test

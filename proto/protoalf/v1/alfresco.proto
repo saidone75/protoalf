@@ -106,6 +106,8 @@ message SortField { string field = 1; bool descending = 2; }
 message SearchResponse { repeated Node entries = 1; bool has_more_items = 2; int64 total_items = 3; }
 
 // ContentService
+// Text offsets must be UTF-8 character boundaries; max_bytes is a strict byte limit.
+// Offsets inside characters and limits too small for the first character yield INVALID_ARGUMENT.
 message GetContentRequest { string node_ref = 1; bool text = 2; int64 offset = 3; int32 max_bytes = 4; }
 message GetContentResponse { Content content = 1; int64 size = 2; bool has_more = 3; }
 message DownloadContentRequest { string node_ref = 1; }

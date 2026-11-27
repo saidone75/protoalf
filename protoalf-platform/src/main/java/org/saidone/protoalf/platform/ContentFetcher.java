@@ -73,14 +73,17 @@ final class ContentFetcher {
 
     /**
      * Reads a bounded document slice, optionally after conversion to UTF-8 text. A document without stored
-     * content returns an empty response. Text offsets apply to transformed bytes.
+     * content returns an empty response. Text offsets apply to transformed bytes and must point to a UTF-8
+     * character boundary. Text limits remain strict: a limit smaller than the first complete character is
+     * rejected instead of returning partial bytes or an empty slice that cannot advance.
      *
      * @param ref document or frozen-version reference
      * @param text true to extract text, false to return stored bytes
      * @param offset non-negative byte offset in the selected representation
-     * @param maxBytes slice limit in 1..MAX_BYTES, or zero for the maximum
+     * @param maxBytes strict slice limit in 1..MAX_BYTES, or zero for the maximum
      * @return the slice, representation size and continuation flag
-     * @throws IllegalArgumentException if pagination is invalid or the node is not a document
+     * @throws IllegalArgumentException if pagination is invalid, a text offset splits a character, the limit
+     *     cannot fit the first text character, or the node is not a document
      * @throws ContentIOException if stored content cannot be read
      * @throws StatusRuntimeException if text extraction is unavailable, unsupported or fails
      */
@@ -217,7 +220,9 @@ final class ContentFetcher {
 
     /**
      * Reads at most limit bytes from an offset, peeking one extra byte to detect continuation. UTF-8 text is
-     * shortened at a trailing character boundary. An offset past EOF yields empty content.
+     * shortened at a trailing character boundary. An offset inside a character or a limit too small for the
+     * first character is rejected; every successful non-final slice contains at least one complete character.
+     * An offset at or past EOF yields empty content.
      *
      * @param reader reader for the selected stored or text representation
      * @param offset non-negative starting byte offset
@@ -239,12 +244,15 @@ final class ContentFetcher {
         }
         val hasMore = buffer.length > limit;
         int end = Math.min(buffer.length, limit);
-        if (text && hasMore) {
-            // buffer[end] is the first byte left out: while it is a UTF-8 continuation byte the slice splits a character.
-            int boundary = end;
-            while (boundary > 0 && (buffer[boundary] & 0xC0) == 0x80) boundary--;
-            if (boundary > 0)
-                end = boundary;
+        if (text && buffer.length > 0) {
+            if ((buffer[0] & 0xC0) == 0x80)
+                throw new IllegalArgumentException("offset must point to a UTF-8 character boundary");
+            if (hasMore) {
+                // buffer[end] is the first omitted byte; back up to the start of a split character.
+                while (end > 0 && (buffer[end] & 0xC0) == 0x80) end--;
+                if (end == 0)
+                    throw new IllegalArgumentException("max_bytes is too small for the first UTF-8 character; increase the limit");
+            }
         }
         val content = Content.newBuilder().setData(ByteString.copyFrom(buffer, 0, end)).setMimetype(Objects.toString(reader.getMimetype(), "")).setEncoding(Objects.toString(reader.getEncoding(), ""));
         return GetContentResponse.newBuilder().setContent(content).setSize(reader.getSize()).setHasMore(hasMore).build();
