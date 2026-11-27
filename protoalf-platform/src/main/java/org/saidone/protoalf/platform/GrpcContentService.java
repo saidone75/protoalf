@@ -97,7 +97,8 @@ public final class GrpcContentService extends ContentServiceGrpc.ContentServiceI
     /**
      * Returns a bounded slice of stored bytes or extracted UTF-8 text. Offsets are byte offsets in the selected
      * representation. A zero limit selects 2 MiB; explicit limits must be 1..2 MiB. Text slices avoid ending
-     * inside a UTF-8 character.
+     * inside a UTF-8 character. Text offsets inside a character and limits too small for the first character
+     * yield {@code INVALID_ARGUMENT}; callers must use a character boundary and a sufficient byte limit.
      *
      * <p>A missing transform facility or unsupported input format yields {@code FAILED_PRECONDITION}; transform
      * content failures yield {@code UNAVAILABLE}. This RPC materializes bytes rather than returning an Alfresco
