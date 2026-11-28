@@ -36,3 +36,6 @@ tmp/
 
 # macOS
 *.DS_Store
+
+# Persistent benchmark reports (survive Maven clean)
+/benchmark-results/

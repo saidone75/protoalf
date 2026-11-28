@@ -53,3 +53,5 @@ To connect Claude Code:
 ```bash
 claude mcp add --transport http alfresco http://localhost:8090/mcp
 ```
+
+Performance regression runs: `./run-benchmark.bb` ([instructions](doc/BENCHMARK.md#automated-docker-regression-run)).
