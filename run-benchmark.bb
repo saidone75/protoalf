@@ -200,35 +200,56 @@ Exit codes: 0 success, 2 regression, 1 failure, 130 interruption.")
 
 (defn number-text [number] (String/format java.util.Locale/ROOT "%.2f" (to-array [(double number)])))
 
-(defn write-report! [output summary]
-  (write-json! (fs/path output "summary.json") summary)
+(defn formatted-table [headers rows numeric-columns style]
+  (let [rows (mapv #(mapv str %) rows)
+        widths (mapv (fn [index header] (apply max 3 (count header) (map #(count (nth % index)) rows))) (range) headers)
+        pad (fn [value width right?]
+              (let [spaces (apply str (repeat (- width (count value)) " "))]
+                (if right? (str spaces value) (str value spaces))))
+        line (fn [cells numeric?]
+               (str "| " (str/join " | " (map-indexed #(pad %2 (widths %1) (and numeric? (contains? numeric-columns %1))) cells)) " |"))
+        border (str "+" (str/join "+" (map #(apply str (repeat (+ % 2) "-")) widths)) "+")
+        separator (if (= style :terminal) border
+                      (str "|" (str/join "|" (map-indexed (fn [index width]
+                                                           (str (apply str (repeat (inc width) "-"))
+                                                                (if (contains? numeric-columns index) ":" "-"))) widths)) "|"))]
+    (str/join "\n" (concat (when (= style :terminal) [border]) [(line headers false) separator]
+                            (map #(line % true) rows) (when (= style :terminal) [border])))))
+
+(defn report-text [summary style]
   (let [rows (:rows summary)
         table (for [[size _] sizes concurrency (sort (set (map :concurrency (filter #(= size (:size %)) rows))))
                     :let [pair (into {} (map (juxt :protocol identity) (filter #(and (= size (:size %)) (== concurrency (:concurrency %))) rows)))
                           rest (get pair "rest") grpc (get pair "grpc")]
                     :when (and rest grpc)]
-                (str "| " size " | " concurrency " | " (number-text (:throughputMiBPerSecond rest)) " | " (number-text (:throughputMiBPerSecond grpc))
-                     " | " (number-text (/ (:throughputMiBPerSecond grpc) (:throughputMiBPerSecond rest))) " | "
-                     (number-text (:p95Ms rest)) " | " (number-text (:p95Ms grpc)) " |"))
+                [(str/replace size #"(KiB|MiB)" " $1") (str (long concurrency))
+                 (number-text (:throughputMiBPerSecond rest)) (number-text (:throughputMiBPerSecond grpc))
+                 (str (number-text (/ (:throughputMiBPerSecond grpc) (:throughputMiBPerSecond rest))) "x")
+                 (number-text (:p95Ms rest)) (number-text (:p95Ms grpc))])
         comparisons (when (seq (:comparison summary))
                       (concat ["" "## Baseline comparison" "" (str "Threshold: " (:threshold summary) "% throughput drop or p95 increase, either protocol.") ""
-                               "| File | Protocol | Concurrency | Throughput drop % | p95 increase % | Regression |"
-                               "|---|---|---:|---:|---:|---|"]
-                              (map #(str "| " (:size %) " | " (:protocol %) " | " (:concurrency %) " | " (number-text (:throughputDropPercent %))
-                                         " | " (number-text (:p95IncreasePercent %)) " | " (if (:regression %) "YES" "no") " |") (:comparison summary))))]
-    (spit (str (fs/path output "report.md"))
+                               (formatted-table ["File" "Protocol" "Concurrent" "Throughput drop %" "p95 increase %" "Regression"]
+                                                (map #(vector (:size %) (:protocol %) (str (long (:concurrency %)))
+                                                              (number-text (:throughputDropPercent %)) (number-text (:p95IncreasePercent %))
+                                                              (if (:regression %) "YES" "no")) (:comparison summary)) #{2 3 4} style)]))]
           (str/join "\n" (concat ["# REST/gRPC download benchmark" "" (str "Status: **" (:status summary) "**") ""
                                    (str "Client revision: `" (:gitRevision summary) "`; dirty: `" (:dirty summary) "`.") ""
                                    "Sizes: small **10 KiB**, medium **1 MiB**, large **100 MiB**." ""
                                    "Localhost, warm caches; REST HTTP, gRPC TLS. Median of repetitions; throughput is aggregate MiB/s." ""
-                                   "| File | Concurrency | REST MiB/s | gRPC MiB/s | gRPC/REST | REST p95 ms | gRPC p95 ms |"
-                                   "|---|---:|---:|---:|---:|---:|---:|"]
-                                  table ["" (str "Successful measured requests in completed cases: " (long (reduce + 0 (map :attempts rows))) ".") ""
+                                   (formatted-table ["File" "Concurrent" "REST MiB/s" "gRPC MiB/s" "gRPC / REST" "REST p95 ms" "gRPC p95 ms"]
+                                                    table #{1 2 3 4 5 6} style)]
+                                  ["" "gRPC / REST: above 1x favors gRPC; below 1x favors REST. Lower p95 is better." ""
+                                   (str "Successful measured requests in completed cases: " (long (reduce + 0 (map :attempts rows))) ".") ""
                                          "Raw samples, errors and per-repetition rates are in each size directory. Failed/partial cases are not improvements."
                                          "These are exploratory measurements; confirm threshold failures on an idle host."]
                                   comparisons
                                   (when (:failure summary) ["" (str "Failure: " (:failure summary) ". Inspect the phase logs and stack.log.")])
-                                  ["" (str "Docker cleanup: " (get summary :cleanup "pending") ". Volumes and fixtures are retained.") ""])))))
+                                  ["" (str "Docker cleanup: " (get summary :cleanup "pending") ". Volumes and fixtures are retained.") ""]))))
+
+(defn write-report! [output summary]
+  (write-json! (fs/path output "summary.json") summary)
+  (spit (str (fs/path output "report.md")) (report-text summary :markdown))
+  (spit (str (fs/path output "report.txt")) (report-text summary :terminal)))
 
 (defn monitor! [context output stop]
   (future
@@ -350,7 +371,7 @@ Exit codes: 0 success, 2 regression, 1 failure, 130 interruption.")
         (finish! context args summary closing? false)
         (try (.removeShutdownHook (Runtime/getRuntime) hook)
              (catch IllegalStateException _ nil))))
-    (println (slurp (str (fs/path (:output args) "report.md"))))
+    (println (slurp (str (fs/path (:output args) "report.txt"))))
     (println "Results:" (:output args))
     (case (:status @summary) "completed" 0 "regression" 2 "interrupted" 130 1)))
 

@@ -19,6 +19,7 @@ The corpus is fixed: **small 10 KiB, medium 1 MiB, large 100 MiB**, with determi
 Defaults reproduce the manual download runs: concurrency **1,4**, three repetitions, 100 measured requests/20 warmups per cell for small and medium files, and 8 requests/4 warmups for large files. Results go to `benchmark-results/<UTC timestamp>/`, which survives Maven clean and is ignored by Git:
 
 - `report.md`: REST/gRPC throughput table, gRPC/REST ratios, p95 latency, outcome and optional baseline comparison.
+- `report.txt`: aligned terminal tables with borders and right-aligned numeric columns; printed automatically at the end of the run. Markdown tables are padded for readable source as well.
 - `summary.json`: medians, throughput min/max across repetitions, fixture hashes and comparison results.
 - `<size>/report.json` and `samples.csv`: original per-repetition reports and individual samples.
 - Build/startup/shutdown logs, ACS discovery, container image identities and sampled Docker CPU/memory/I/O metrics.
