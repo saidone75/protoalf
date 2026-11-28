@@ -18,7 +18,8 @@
 (def repo (str (fs/parent (fs/absolutize *file*))))
 (def sizes [["10KiB" 10240] ["1MiB" 1048576] ["100MiB" 104857600]])
 (def defaults {:concurrency "1,4" :requests 100 :large-requests 8 :warmup 20 :large-warmup 4
-               :repetitions 3 :startup-timeout 900 :timeout-seconds 300 :threshold 15.0})
+               :repetitions 3 :startup-timeout 900 :timeout-seconds 300 :threshold 15.0
+               :scenarios "download,list" :listing-items 1000 :page-size 100})
 (def help-text
   "Usage: ./run-benchmark.bb [--output=DIR] [--baseline=DIR] [--threshold=15]
   --concurrency=1,4      Concurrent downloads
@@ -27,6 +28,9 @@
   --warmup=20            Warmup requests/cell for small/medium files
   --large-warmup=4       Warmup requests/cell for large files
   --repetitions=3        Repetitions per protocol and concurrency
+  --scenarios=download,list  Workloads (list-no-count is gRPC-only)
+  --listing-items=1000   Stable populated listing folder
+  --page-size=100        Listing page size, 1..1000
   --startup-timeout=900  Docker startup/readiness timeout in seconds
   --timeout-seconds=300  Per benchmark operation timeout
 Builds and tests all modules, rebuilds Docker, benchmarks, reports and stops containers.
@@ -53,11 +57,17 @@ Exit codes: 0 success, 2 regression, 1 failure, 130 interruption.")
                                                 (number? (get defaults key)) (Long/parseLong value)
                                                 :else value))) defaults raw)
         workers (mapv #(Long/parseLong %) (str/split (:concurrency parsed) #"," -1))
+        scenarios (str/split (:scenarios parsed) #"," -1)
         output (absolute (or (:output parsed) (str (fs/path repo "benchmark-results" (str/replace (str (Instant/now)) #":" "-")))))]
     (when (or (empty? workers) (not= (count workers) (count (set workers)))
               (some #(not (<= 1 % 256)) workers))
       (fail "Concurrency must contain unique values in 1..256"))
     (when-not (< 0 (:threshold parsed) 100) (fail "Threshold must be between 0 and 100"))
+    (when (or (not= (count scenarios) (count (set scenarios))) (some #(not (#{"download" "list" "list-no-count"} %)) scenarios))
+      (fail "Scenarios must be download, list and/or list-no-count"))
+    (when-not (<= 1 (:page-size parsed) 1000) (fail "Page size must be in 1..1000"))
+    (when-not (<= (:page-size parsed) (:listing-items parsed) 10000)
+      (fail "Listing items must cover a page and be at most 10000"))
     (doseq [key [:requests :large-requests :warmup :large-warmup :repetitions :startup-timeout :timeout-seconds]]
       (when-not (pos? (key parsed)) (fail (str (name key) " must be positive"))))
     (when (< (apply min (map parsed [:requests :large-requests :warmup :large-warmup])) (apply max workers))
@@ -65,7 +75,7 @@ Exit codes: 0 success, 2 regression, 1 failure, 130 interruption.")
     (when (and (str/starts-with? output (str repo "/"))
                (some #{"target"} (str/split (subs output (inc (count repo))) #"/")))
       (fail "Output must survive Maven clean; use benchmark-results/"))
-    (assoc parsed :workers workers :output output)))
+    (assoc parsed :workers workers :workloads scenarios :output output)))
 
 (defn command!
   "Log commands without secrets. Kill descendants on timeout, failure or interruption."
@@ -158,6 +168,39 @@ Exit codes: 0 success, 2 regression, 1 failure, 130 interruption.")
                   {:label label :id (:id entry) :bytes size :sha256 hash})
                 (finally (fs/delete-if-exists path))))) sizes)))
 
+(defn listing-entries! [repository folder]
+  (loop [skip 0 result []]
+    (let [page (:list (request! repository :get (str api "/nodes/" folder "/children?maxItems=1000&skipCount=" skip
+                                                   "&orderBy=name%20ASC&include=properties,aspectNames")))
+          entries (mapv :entry (:entries page))]
+      (when (and (get-in page [:pagination :hasMoreItems]) (empty? entries)) (fail "Listing fixture paging made no progress"))
+      (if (get-in page [:pagination :hasMoreItems])
+        (recur (+ skip (count entries)) (into result entries))
+        (into result entries)))))
+
+(defn listing-fixture! [repository args]
+  (let [home (child! repository "-my-" "Benchmark" true)
+        folder (child! repository (:id home) (str "listing-v1-" (:listing-items args)) true)
+        names (mapv #(format "entry-%05d.txt" %) (range (:listing-items args)))
+        existing (listing-entries! repository (:id folder))
+        present (set (map :name existing))]
+    (when (seq (remove (set names) present)) (fail "Listing fixture contains unexpected nodes; nothing was overwritten"))
+    (doseq [[index name] (map-indexed vector names) :when (not (present name))]
+      (request! repository :post (str api "/nodes/" (:id folder) "/children")
+                {:name name :nodeType "cm:content" :aspectNames ["cm:titled"]
+                 :properties {"cm:title" name "cm:description" "Stable listing fixture v1"}})
+      (when (zero? (mod (inc index) 100)) (println "Prepared listing entries:" (inc index))))
+    (let [entries (listing-entries! repository (:id folder))
+          signature (mapv #(vector (:id %) (:name %) (:nodeType %) (get-in % [:properties :cm:title])
+                                   (get-in % [:properties :cm:description]) (vec (sort (:aspectNames %)))) entries)]
+      (when-not (and (= names (mapv :name entries))
+                     (every? #(and (= "cm:content" (:nodeType %)) (= (:name %) (get-in % [:properties :cm:title]))
+                                    (= "Stable listing fixture v1" (get-in % [:properties :cm:description]))) entries))
+        (fail "Listing fixture changed; existing nodes were not overwritten"))
+      {:label "listing" :scenario "list" :folder (:id folder) :items (count entries) :pageSize (:page-size args) :bytes 0
+       :sha256 (.formatHex (HexFormat/of) (.digest (MessageDigest/getInstance "SHA-256")
+                                                 (.getBytes (json/generate-string signature) StandardCharsets/UTF_8)))})))
+
 (defn median [values]
   (let [values (vec (sort values)) n (count values) middle (quot n 2)]
     (when (zero? n) (fail "No samples"))
@@ -165,23 +208,29 @@ Exit codes: 0 success, 2 regression, 1 failure, 130 interruption.")
 
 (defn summarize [report fixture repetitions workers]
   (when-not (= "completed" (:status report)) (fail (str "Incomplete benchmark: " (:label fixture))))
-  (when-not (and (== (:bytes fixture) (get-in report [:corpus 0 :binary :bytes])) (= (:sha256 fixture) (get-in report [:corpus 0 :binary :sha256])))
+  (when-not (or (str/starts-with? (get fixture :scenario "") "list")
+                (and (== (:bytes fixture) (get-in report [:corpus 0 :binary :bytes])) (= (:sha256 fixture) (get-in report [:corpus 0 :binary :sha256]))))
     (fail (str "Fixture fingerprint differs: " (:label fixture) "; it was not overwritten")))
   (let [runs (:runs report)
-        expected (set (for [protocol ["rest" "grpc"] concurrency workers repetition (range 1 (inc repetitions))]
+        protocols (get fixture :protocols ["rest" "grpc"])
+        expected (set (for [protocol protocols concurrency workers repetition (range 1 (inc repetitions))]
                         [protocol concurrency repetition]))
         actual (mapv (fn [run] [(:protocol run) (long (:concurrency run)) (long (:repetition run))]) runs)]
     (when-not (and (= (count actual) (count expected)) (= (set actual) expected))
       (fail "Missing or duplicated benchmark cells"))
     (when (some #(or (seq (:errors %)) (not= (:successes %) (:attempts %))) runs)
       (fail "Benchmark contains failed requests"))
-    (vec (for [concurrency workers protocol ["rest" "grpc"]
+    (vec (for [concurrency workers protocol protocols
                :let [cells (filter #(and (== concurrency (:concurrency %)) (= protocol (:protocol %))) runs)
                      rates (map :contentMiBPerSecond cells)]]
-           {:size (:label fixture) :bytes (:bytes fixture) :sha256 (:sha256 fixture) :protocol protocol :concurrency concurrency
+           {:size (:label fixture) :scenario (get fixture :scenario "download") :bytes (:bytes fixture) :sha256 (:sha256 fixture) :protocol protocol :concurrency concurrency
             :throughputMiBPerSecond (median rates) :throughputMin (apply min rates) :throughputMax (apply max rates)
+            :nodesPerSecond (median (map #(get % :successfulUnitsPerSecond 0) cells))
             :operationsPerSecond (median (map :successfulOperationsPerSecond cells))
             :p95Ms (median (map #(get-in % [:latencyMs :p95]) cells)) :attempts (reduce + (map :attempts cells))}))))
+
+(defn throughput [row]
+  (if (str/starts-with? (get row :scenario "") "list") (:nodesPerSecond row) (:throughputMiBPerSecond row)))
 
 (defn compare-baseline [current baseline threshold]
   (when-not (= "completed" (:status baseline)) (fail "Baseline must be a successful complete run"))
@@ -191,7 +240,7 @@ Exit codes: 0 success, 2 regression, 1 failure, 130 interruption.")
     (when-not (= (set (keys previous)) (set (map key (:rows current)))) (fail "Baseline cases differ"))
     (mapv (fn [row]
             (let [old (get previous (key row))
-                  drop (* 100 (- 1 (/ (:throughputMiBPerSecond row) (:throughputMiBPerSecond old))))
+                  drop (* 100 (- 1 (/ (throughput row) (throughput old))))
                   increase (* 100 (- (/ (:p95Ms row) (:p95Ms old)) 1))]
               (when-not (= (select-keys row [:bytes :sha256]) (select-keys old [:bytes :sha256]))
                 (fail "Baseline corpus differs"))
@@ -218,6 +267,14 @@ Exit codes: 0 success, 2 regression, 1 failure, 130 interruption.")
 
 (defn report-text [summary style]
   (let [rows (:rows summary)
+        listing (for [scenario ["list" "list-no-count"]
+                      concurrency (sort (set (map :concurrency (filter #(= scenario (:scenario %)) rows))))
+                      :let [pair (into {} (map (juxt :protocol identity) (filter #(and (= scenario (:scenario %)) (== concurrency (:concurrency %))) rows)))
+                            rest (get pair "rest") grpc (get pair "grpc")]]
+                  [(if (= scenario "list") "Exact" "No count") (str (long concurrency))
+                   (if rest (number-text (:nodesPerSecond rest)) "-") (number-text (:nodesPerSecond grpc))
+                   (if rest (str (number-text (/ (:nodesPerSecond grpc) (:nodesPerSecond rest))) "x") "-")
+                   (if rest (number-text (:p95Ms rest)) "-") (number-text (:p95Ms grpc))])
         table (for [[size _] sizes concurrency (sort (set (map :concurrency (filter #(= size (:size %)) rows))))
                     :let [pair (into {} (map (juxt :protocol identity) (filter #(and (= size (:size %)) (== concurrency (:concurrency %))) rows)))
                           rest (get pair "rest") grpc (get pair "grpc")]
@@ -232,12 +289,16 @@ Exit codes: 0 success, 2 regression, 1 failure, 130 interruption.")
                                                 (map #(vector (:size %) (:protocol %) (str (long (:concurrency %)))
                                                               (number-text (:throughputDropPercent %)) (number-text (:p95IncreasePercent %))
                                                               (if (:regression %) "YES" "no")) (:comparison summary)) #{2 3 4} style)]))]
-          (str/join "\n" (concat ["# REST/gRPC download benchmark" "" (str "Status: **" (:status summary) "**") ""
+          (str/join "\n" (concat ["# REST/gRPC repository benchmark" "" (str "Status: **" (:status summary) "**") ""
                                    (str "Client revision: `" (:gitRevision summary) "`; dirty: `" (:dirty summary) "`.") ""
-                                   "Sizes: small **10 KiB**, medium **1 MiB**, large **100 MiB**." ""
-                                   "Localhost, warm caches; REST HTTP, gRPC TLS. Median of repetitions; throughput is aggregate MiB/s." ""
-                                   (formatted-table ["File" "Concurrent" "REST MiB/s" "gRPC MiB/s" "gRPC / REST" "REST p95 ms" "gRPC p95 ms"]
-                                                    table #{1 2 3 4 5 6} style)]
+                                   "Localhost, warm caches; REST HTTP, gRPC TLS. Median of repetitions." ""]
+                                  (when (seq table) ["## Downloads: 10 KiB / 1 MiB / 100 MiB" ""
+                                                     (formatted-table ["File" "Concurrent" "REST MiB/s" "gRPC MiB/s" "gRPC / REST" "REST p95 ms" "gRPC p95 ms"]
+                                                                      table #{1 2 3 4 5 6} style)])
+                                  (when (seq listing) ["" "## Listing: full node responses" ""
+                                                       "No count is a separate gRPC-only profile; it does not return an exact total." ""
+                                                       (formatted-table ["Count" "Concurrent" "REST nodes/s" "gRPC nodes/s" "gRPC / REST" "REST p95 ms" "gRPC p95 ms"]
+                                                                        listing #{1 2 3 4 5 6} style)])
                                   ["" "gRPC / REST: above 1x favors gRPC; below 1x favors REST. Lower p95 is better." ""
                                    (str "Successful measured requests in completed cases: " (long (reduce + 0 (map :attempts rows))) ".") ""
                                          "Raw samples, errors and per-repetition rates are in each size directory. Failed/partial cases are not improvements."
@@ -292,7 +353,11 @@ Exit codes: 0 success, 2 regression, 1 failure, 130 interruption.")
     (let [ca (str (fs/path output "ca.crt"))]
       (command! context (into compose ["exec" "-T" "acs" "cat" "/grpc-certs/ca.crt"]) ca)
       (println "Preparing/reusing deterministic benchmark fixtures...")
-      (let [corpus (fixtures! repository output)
+      (let [listing (when (some #{"list" "list-no-count"} (:workloads args)) (listing-fixture! repository args))
+            corpus (cond-> []
+                     (some #{"download"} (:workloads args)) (into (fixtures! repository output))
+                     (some #{"list"} (:workloads args)) (conj listing)
+                     (some #{"list-no-count"} (:workloads args)) (conj (assoc listing :label "listing-no-count" :scenario "list-no-count" :protocols ["grpc"])))
             env {"BENCH_USERNAME" user "BENCH_PASSWORD" password "BENCH_REST_URL" (:url repository)
                  "BENCH_GRPC_HOST" "localhost" "BENCH_GRPC_PORT" "9090" "BENCH_GRPC_CA" ca "BENCH_GRPC_AUTHORITY" "localhost"}]
         (write-json! (fs/path output "fixtures.json") corpus)
@@ -306,8 +371,11 @@ Exit codes: 0 success, 2 regression, 1 failure, 130 interruption.")
             (doseq [fixture corpus]
               (let [label (:label fixture) large? (= label "100MiB")]
                 (println (str "Benchmarking " label "..."))
-                (command! context [(str (fs/path repo "protoalf-client/src/test/benchmark/run.sh")) (str "--nodes=" (:id fixture))
-                                   "--scenarios=download" (str "--concurrency=" (:concurrency args))
+                (command! context [(str (fs/path repo "protoalf-client/src/test/benchmark/run.sh")) (str "--nodes=" (get fixture :id ""))
+                                   (str "--scenarios=" (get fixture :scenario "download"))
+                                   (str "--protocols=" (str/join "," (get fixture :protocols ["rest" "grpc"])))
+                                   (str "--folder=" (get fixture :folder "-root-")) (str "--page-size=" (:page-size args))
+                                   (str "--concurrency=" (:concurrency args))
                                    (str "--requests=" (if large? (:large-requests args) (:requests args)))
                                    (str "--warmup=" (if large? (:large-warmup args) (:warmup args)))
                                    (str "--repetitions=" (:repetitions args)) (str "--timeout-seconds=" (:timeout-seconds args))
@@ -343,6 +411,7 @@ Exit codes: 0 success, 2 regression, 1 failure, 130 interruption.")
                  :processes (atom #{}) :cancelled? (atom false)}
         baseline (when (:baseline args) (read-json (fs/path (:baseline args) "summary.json")))
         configuration {:requests (:requests args) :largeRequests (:large-requests args) :warmup (:warmup args) :largeWarmup (:large-warmup args)
+                       :scenarios (:workloads args) :listingItems (:listing-items args) :pageSize (:page-size args)
                        :repetitions (:repetitions args) :concurrency (:workers args) :timeoutSeconds (:timeout-seconds args)
                        :transport "REST HTTP / gRPC TLS" :cache "warm" :corpusVersion 2 :user (or (System/getenv "BENCH_USERNAME") "mcp")}
         summary (atom {:status "running" :rows [] :configuration configuration :started (str (Instant/now)) :threshold (:threshold args)})

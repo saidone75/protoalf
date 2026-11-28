@@ -4,12 +4,14 @@ import lombok.val;
 import org.alfresco.model.ContentModel;
 import org.alfresco.repo.security.authentication.AuthenticationUtil;
 import org.alfresco.service.ServiceRegistry;
+import org.alfresco.service.cmr.model.FileInfo;
 import org.alfresco.service.cmr.repository.*;
 import org.alfresco.service.cmr.security.AccessStatus;
 import org.alfresco.service.cmr.security.PermissionService;
 import org.alfresco.service.namespace.QName;
 import org.saidone.protoalf.api.*;
 
+import java.io.Serializable;
 import java.util.*;
 
 /**
@@ -66,6 +68,34 @@ final class NodeMapper {
     }
 
     /**
+     * Creates a mapper for one listing transaction attempt. Parent permission decisions are shared only
+     * within this scope, never between requests, users or transaction retries.
+     *
+     * @return a listing-local mapper using metadata already fetched by the secured file/folder service
+     */
+    Listing listing() {
+        return new Listing();
+    }
+
+    /** Reuses file information and caches grants and denials for actual primary parents within one page. */
+    final class Listing {
+
+        private final Map<NodeRef, Boolean> readableParents = new HashMap<>();
+
+        /**
+         * Maps the same full snapshot as {@link NodeMapper#map(NodeRef)} without rereading type/properties.
+         * The listing folder is not assumed to be the node's primary parent.
+         *
+         * @param file information returned by the secured Alfresco file/folder service in this transaction
+         * @return a full node snapshot with a permission-filtered primary parent
+         */
+        Node map(FileInfo file) {
+            val ref = file.getNodeRef();
+            return snapshot(ref, file.getType(), file.getProperties(), parent(ref, readableParents));
+        }
+    }
+
+    /**
      * Builds a node snapshot with type, name, sorted aspects and typed properties. Parent inclusion is
      * permission checked and can be disabled for frozen version nodes.
      *
@@ -74,11 +104,16 @@ final class NodeMapper {
      * @return a transport snapshot without content-store locations
      */
     private Node map(NodeRef ref, boolean withParent) {
-        val result = Node.newBuilder().setNodeRef(ref.toString()).setType(nodes.getType(ref).toString());
+        val type = nodes.getType(ref);
         val parent = withParent ? parent(ref) : null;
+        return snapshot(ref, type, nodes.getProperties(ref), parent);
+    }
+
+    /** Builds the complete transport snapshot from metadata already read in the caller's transaction. */
+    private Node snapshot(NodeRef ref, QName type, Map<QName, Serializable> properties, NodeRef parent) {
+        val result = Node.newBuilder().setNodeRef(ref.toString()).setType(type.toString());
         if (parent != null)
             result.setParentRef(parent.toString());
-        val properties = nodes.getProperties(ref);
         val name = properties.get(ContentModel.PROP_NAME);
         if (name != null)
             result.setName(name.toString());
@@ -96,12 +131,22 @@ final class NodeMapper {
      * @return the readable primary parent, or null if absent or unreadable
      */
     private NodeRef parent(NodeRef ref) {
+        return parent(ref, null);
+    }
+
+    /** Resolves the real primary parent and optionally reuses its permission decision for this page only. */
+    private NodeRef parent(NodeRef ref, Map<NodeRef, Boolean> readableParents) {
         val association = AuthenticationUtil.runAsSystem(() -> nodes.getPrimaryParent(ref));
         val parent = association == null ? null : association.getParentRef();
         if (parent == null)
             return null;
-        val readable = services.getPermissionService().hasPermission(parent, PermissionService.READ_PROPERTIES);
-        return readable == AccessStatus.ALLOWED ? parent : null;
+        val readable = readableParents == null ? readable(parent) : readableParents.computeIfAbsent(parent, this::readable);
+        return readable ? parent : null;
+    }
+
+    /** Evaluates visibility as the restored caller, never under the system identity used for lookup. */
+    private boolean readable(NodeRef ref) {
+        return services.getPermissionService().hasPermission(ref, PermissionService.READ_PROPERTIES) == AccessStatus.ALLOWED;
     }
 
     /**

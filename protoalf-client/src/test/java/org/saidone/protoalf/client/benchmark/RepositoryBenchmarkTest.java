@@ -5,6 +5,7 @@ import com.sun.net.httpserver.HttpServer;
 import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.grpc.stub.StreamObserver;
+import lombok.val;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,6 +34,7 @@ class RepositoryBenchmarkTest {
     private volatile boolean mismatch;
     private volatile boolean failMeasured;
     private volatile boolean stallContent;
+    private volatile boolean ignoreCountSelection;
     private final java.util.concurrent.CountDownLatch releaseBody = new java.util.concurrent.CountDownLatch(1);
     private static final byte[] DATA = "benchmark content".getBytes(StandardCharsets.UTF_8);
     private static final String CM = "http://www.alfresco.org/model/content/1.0";
@@ -58,7 +60,7 @@ class RepositoryBenchmarkTest {
                     }
                 }).addService(new FileFolderServiceGrpc.FileFolderServiceImplBase() {
                     @Override public void list(ListChildrenRequest request, StreamObserver<ListChildrenResponse> observer) {
-                        observer.onNext(ListChildrenResponse.newBuilder().addEntries(node).setTotalItems(1).build()); observer.onCompleted();
+                        observer.onNext(ListChildrenResponse.newBuilder().addEntries(node).setTotalItems(!ignoreCountSelection && request.hasCountTotal() && !request.getCountTotal() ? -1 : 1).build()); observer.onCompleted();
                     }
                 }).addService(new ContentServiceGrpc.ContentServiceImplBase() {
                     @Override public void downloadContent(DownloadContentRequest request, StreamObserver<DownloadContentResponse> observer) {
@@ -141,6 +143,21 @@ class RepositoryBenchmarkTest {
         assertThat(Files.readAllLines(temporary.resolve("results/samples.csv"))).hasSize(43);
         assertThatIllegalArgumentException().isThrownBy(() -> RepositoryBenchmark.run(config("results", "--scenarios=node")));
     }
+    @Test
+    void noCountListingIsGrpcOnlyAndRequiresTheServerToHonorTheOption() throws Exception {
+        RepositoryBenchmark.run(config("no-count", "--scenarios=list-no-count", "--protocols=grpc", "--nodes=", "--repetitions=1"));
+        val report = BenchmarkJson.parse(Files.readString(temporary.resolve("no-count/report.json")));
+        assertThat(BenchmarkJson.text(report, "status")).isEqualTo("completed");
+        val runs = BenchmarkJson.field(report, "runs").getListValue().getValuesList();
+        assertThat(runs).hasSize(1);
+        assertThat(BenchmarkJson.text(runs.get(0).getStructValue(), "scenario")).isEqualTo("list-no-count");
+        ignoreCountSelection = true;
+        assertThatThrownBy(() -> RepositoryBenchmark.run(config("unsupported-count", "--scenarios=list-no-count", "--protocols=grpc", "--nodes=", "--repetitions=1")))
+                .isInstanceOf(IllegalStateException.class);
+        val rejected = BenchmarkJson.parse(Files.readString(temporary.resolve("unsupported-count/report.json")));
+        assertThat(BenchmarkJson.text(rejected, "status")).isEqualTo("aborted");
+    }
+
     @Test
     void rejectsDifferentCorporaBeforeTimingAnything() throws Exception {
         mismatch = true;

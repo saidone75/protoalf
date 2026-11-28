@@ -2,6 +2,7 @@ package org.saidone.protoalf.client.benchmark;
 
 import com.google.protobuf.Struct;
 import io.grpc.ManagedChannel;
+import lombok.val;
 import org.saidone.protoalf.api.Node;
 import org.saidone.protoalf.client.AlfrescoGrpcChannels;
 import org.saidone.protoalf.client.AuthenticationServiceClient;
@@ -51,11 +52,11 @@ public final class RepositoryBenchmark {
                     || uri.getQuery() != null || uri.getFragment() != null) throw new IllegalArgumentException("Invalid BENCH_REST_URL");
             var scenarios = csv(options.getOrDefault("scenarios", "node,list,download"));
             var protocols = csv(options.getOrDefault("protocols", "rest,grpc"));
-            if (scenarios.isEmpty() || !Set.of("node", "list", "download", "text").containsAll(scenarios)
+            if (scenarios.isEmpty() || !Set.of("node", "list", "list-no-count", "download", "text").containsAll(scenarios)
                     || protocols.isEmpty() || !Set.of("rest", "grpc").containsAll(protocols)
-                    || scenarios.contains("text") && !protocols.contains("grpc")) throw new IllegalArgumentException("Invalid scenarios/protocols");
+                    || (scenarios.contains("text") || scenarios.contains("list-no-count")) && !protocols.contains("grpc")) throw new IllegalArgumentException("Invalid scenarios/protocols");
             var nodes = csv(options.getOrDefault("nodes", ""));
-            if (scenarios.stream().anyMatch(s -> !s.equals("list")) && nodes.isEmpty()) throw new IllegalArgumentException("--nodes is required");
+            if (scenarios.stream().anyMatch(s -> !s.equals("list") && !s.equals("list-no-count")) && nodes.isEmpty()) throw new IllegalArgumentException("--nodes is required");
             if (nodes.stream().anyMatch(id -> !id.matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,99}"))) throw new IllegalArgumentException("Use bare document IDs in --nodes");
             String password = env.get("BENCH_PASSWORD");
             if (password == null || password.isEmpty()) throw new IllegalArgumentException("Set BENCH_PASSWORD in the environment");
@@ -91,7 +92,7 @@ public final class RepositoryBenchmark {
     public static void main(String[] args) throws Exception {
         if (Arrays.asList(args).contains("--help")) {
             System.out.println("""
-                    RepositoryBenchmark --nodes=ID[,ID] [--folder=-root-] [--scenarios=node,list,download,text]
+                    RepositoryBenchmark --nodes=ID[,ID] [--folder=-root-] [--scenarios=node,list,list-no-count,download,text]
                       [--protocols=rest,grpc] [--concurrency=1,4,8] [--requests=200] [--warmup=20]
                       [--repetitions=3] [--page-size=100] [--text-chunk-bytes=100000]
                       [--timeout-seconds=30] [--output=DIRECTORY] [--label=warm-cache]
@@ -164,7 +165,7 @@ public final class RepositoryBenchmark {
                 }
                 corpus.add(fixture);
             }
-            if (config.scenarios.contains("list") && config.protocols.containsAll(List.of("rest", "grpc"))) {
+            if ((config.scenarios.contains("list") || config.scenarios.contains("list-no-count")) && config.protocols.containsAll(List.of("rest", "grpc"))) {
                 var left = new ArrayList<String>();
                 for (var entry : BenchmarkJson.field(rest.list(config.folder, config.pageSize), "entries").getListValue().getValuesList())
                     left.add(signature(BenchmarkJson.child(entry.getStructValue(), "entry")));
@@ -178,7 +179,7 @@ public final class RepositoryBenchmark {
                     var order = new ArrayList<>(config.protocols);
                     if (repetition % 2 == 0) Collections.reverse(order);
                     for (String protocol : order) {
-                        if (scenario.equals("text") && protocol.equals("rest")) continue;
+                        if ((scenario.equals("text") || scenario.equals("list-no-count")) && protocol.equals("rest")) continue;
                         BenchmarkRunner.Operation operation = index -> {
                             String id = config.nodes.isEmpty() ? "" : config.nodes.get(index % config.nodes.size());
                             return switch (scenario) {
@@ -186,9 +187,14 @@ public final class RepositoryBenchmark {
                                     if (protocol.equals("rest")) rest.node(id); else nodes.getNode(id);
                                     yield new BenchmarkRunner.Work(1, 0);
                                 }
-                                case "list" -> new BenchmarkRunner.Work(protocol.equals("rest")
-                                        ? BenchmarkJson.field(rest.list(config.folder, config.pageSize), "entries").getListValue().getValuesCount()
-                                        : files.list(config.folder, 0, config.pageSize).getEntriesCount(), 0);
+                                case "list", "list-no-count" -> {
+                                    if (protocol.equals("rest"))
+                                        yield new BenchmarkRunner.Work(BenchmarkJson.field(rest.list(config.folder, config.pageSize), "entries").getListValue().getValuesCount(), 0);
+                                    val page = scenario.equals("list-no-count") ? files.list(config.folder, 0, config.pageSize, false) : files.list(config.folder, 0, config.pageSize);
+                                    if (scenario.equals("list-no-count") && page.getTotalItems() != -1)
+                                        throw new IllegalStateException("Platform did not disable exact counting");
+                                    yield new BenchmarkRunner.Work(page.getEntriesCount(), 0);
+                                }
                                 case "download" -> {
                                     var sink = new Sink(false);
                                     if (protocol.equals("rest")) rest.download(id, sink); else content.downloadContent(id, sink);

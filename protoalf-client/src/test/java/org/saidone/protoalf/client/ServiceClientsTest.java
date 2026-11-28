@@ -117,7 +117,8 @@ class ServiceClientsTest {
         val files = new FileFolderServiceGrpc.FileFolderServiceImplBase() {
 
             @Override public void list(ListChildrenRequest request, StreamObserver<ListChildrenResponse> observer) {
-                observer.onNext(ListChildrenResponse.newBuilder().setTotalItems(3).build());
+                nodeRequests.add(request);
+                observer.onNext(ListChildrenResponse.newBuilder().setTotalItems(request.hasCountTotal() && !request.getCountTotal() ? -1 : 3).build());
                 observer.onCompleted();
             }
 
@@ -377,6 +378,23 @@ class ServiceClientsTest {
         assertThat(files.copy("doc", "folder", "copy.txt").getParentRef()).isEqualTo("folder");
         val dictionary = new DictionaryServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
         assertThat(dictionary.getModel("cm:contentmodel", true).getName()).isEqualTo("cm:contentmodel");
+    }
+
+    @Test
+    void listingCountSelectionPreservesLegacyAbsenceAndExplicitFlags() {
+        val client = new FileFolderServiceClient(channel, TicketProvider.of("TICKET_OK"), Duration.ofSeconds(5));
+        assertThat(client.list("parent", 0, 100).getTotalItems()).isEqualTo(3);
+        assertThat(client.list("parent", 10, 50, false).getTotalItems()).isEqualTo(-1);
+        assertThat(client.list("parent", 10, 50, true).getTotalItems()).isEqualTo(3);
+        val legacy = (ListChildrenRequest) nodeRequests.get(0);
+        val disabled = (ListChildrenRequest) nodeRequests.get(1);
+        val exact = (ListChildrenRequest) nodeRequests.get(2);
+        assertThat(legacy.hasCountTotal()).isFalse();
+        assertThat(disabled.hasCountTotal()).isTrue();
+        assertThat(disabled.getCountTotal()).isFalse();
+        assertThat(disabled.getSkipCount()).isEqualTo(10);
+        assertThat(disabled.getMaxItems()).isEqualTo(50);
+        assertThat(exact.getCountTotal()).isTrue();
     }
 
     @Test
