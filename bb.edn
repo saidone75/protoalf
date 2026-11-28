@@ -1,0 +1,10 @@
+{:paths ["protoalf-client/src/test/benchmark"]
+ :tasks
+ {benchmark {:doc "Build/start Docker, benchmark, report and stop (see --help)"
+             :task (do (load-file "run-benchmark.bb")
+                       (apply (resolve 'docker-benchmark/-main) *command-line-args*))}
+  test:benchmark {:doc "Test benchmark automation without Docker"
+                  :task (do (require 'docker-benchmark-test)
+                            (let [result ((requiring-resolve 'clojure.test/run-tests) 'docker-benchmark-test)]
+                              (when (pos? (+ (:fail result) (:error result)))
+                                (System/exit 1))))}}}

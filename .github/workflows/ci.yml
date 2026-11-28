@@ -31,6 +31,14 @@ jobs:
           cache: maven
           cache-dependency-path: '**/pom.xml'
 
+      - name: Set up Babashka
+        uses: DeLaGuardo/setup-clojure@13.7.0
+        with:
+          bb: '1.13.229'
+
+      - name: Test benchmark automation
+        run: bb test:benchmark
+
       - name: Generate gRPC sources, compile, test and package all modules
         run: mvn --batch-mode --no-transfer-progress -Dstyle.color=never clean package
 

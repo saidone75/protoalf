@@ -114,6 +114,8 @@ Assessment date: 2026-11-27. The goal is to maximize Alfresco throughput and red
 
     Initial read-only harness: `protoalf-client/src/test/benchmark/run.sh` (instructions in `doc/BENCHMARK.md`). It covers full-node reads, first-page listings, binary transfers, and a separate gRPC-only paged-text scenario, with preflight checks, warmup, concurrency, repetitions, raw samples and JSON summaries. The harness is tested against fake HTTP/gRPC servers; a live ACS baseline, additional workloads and server profiling remain outstanding.
 
+    Automated download regression runner: `./run-benchmark.bb` builds/tests the project, recreates Docker, prepares stable 10 KiB/1 MiB/100 MiB fixtures, writes Markdown/JSON reports and stops containers while retaining volumes. It can compare absolute throughput and p95 against a saved baseline and fail on a configurable regression threshold.
+
     Next step: run the benchmark against a live ACS instance and save a baseline before implementing extraction caching. Use a stable document corpus and the same user for REST and gRPC; record deployed ACS/platform versions, configuration, raw samples and server metrics.
 
     Compare equivalent operations with the same user permissions, response fields, content, cache conditions and consistency requirements. Cover metadata reads, large-folder listing, search, writes, bulk workloads, binary transfers and text extraction. Record nodes/s, MB/s, p50/p95/p99 latency, errors, SQL activity, CPU, allocations/GC and queue saturation across concurrency levels, with cold and warm caches. Separate transport savings from reduced repository work; use the baseline to validate the priorities above and detect regressions.

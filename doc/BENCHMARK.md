@@ -2,7 +2,46 @@
 
 Opt-in, read-only end-to-end benchmark in the client's test sources. It is not packaged in the client JAR and does not run during normal Maven tests or CI. The ordinary `*Test` classes verify the harness against local fake HTTP/gRPC servers; their timings are not ACS performance results.
 
-Requires JDK 21+, Maven and a running ACS instance with the matching protoalf platform module. The runner does not start Docker, create/edit/delete fixture nodes, or clear caches.
+The low-level runner requires JDK 21+, Maven and a running ACS instance with the matching protoalf platform module. It does not start Docker, create/edit/delete fixture nodes, or clear caches. The automated wrapper below handles Docker lifecycle and download fixtures.
+
+## Automated Docker regression run
+
+Requires JDK 21+, Maven, Babashka 1.13+ and Docker Compose v2. From the repository root:
+
+```bash
+./run-benchmark.bb
+```
+
+The same runner is also available as `bb benchmark`. This command builds and tests all Maven modules, rebuilds the ACS/MCP images, recreates the development stack, waits for authenticated ACS access, prepares fixtures and runs download benchmarks. It then stops the stack with `docker compose down`, including on benchmark failures or Ctrl+C. Database/content/certificate volumes are retained. It takes ownership of the development stack even when it was already running; use it when that stack can be restarted and stopped. A build failure before startup leaves the existing stack untouched.
+
+The corpus is fixed: **small 10 KiB, medium 1 MiB, large 100 MiB**, with deterministic, poorly compressible bytes. Fixtures are created once under the benchmark user's home in `Benchmark` and reused. Fixture names and generation are versioned; a different corpus version requires a new baseline. Existing content is never overwritten: sizes and preflight SHA-256 fingerprints must match. Upload preparation is outside measurements. The default user is `mcp`, with `BENCH_PASSWORD` falling back to `MCP_ALFRESCO_PASSWORD` or the stack default `example`. For a custom Compose password, export `MCP_ALFRESCO_PASSWORD` before running; `BENCH_USERNAME`/`BENCH_PASSWORD` can select another existing repository user. The orchestrator always targets the local stack on REST 8080 and gRPC 9090 and reads its TLS CA automatically.
+
+Defaults reproduce the manual download runs: concurrency **1,4**, three repetitions, 100 measured requests/20 warmups per cell for small and medium files, and 8 requests/4 warmups for large files. Results go to `benchmark-results/<UTC timestamp>/`, which survives Maven clean and is ignored by Git:
+
+- `report.md`: REST/gRPC throughput table, gRPC/REST ratios, p95 latency, outcome and optional baseline comparison.
+- `report.txt`: aligned terminal tables with borders and right-aligned numeric columns; printed automatically at the end of the run. Markdown tables are padded for readable source as well.
+- `summary.json`: medians, throughput min/max across repetitions, fixture hashes and comparison results.
+- `<size>/report.json` and `samples.csv`: original per-repetition reports and individual samples.
+- Build/startup/shutdown logs, ACS discovery, container image identities and sampled Docker CPU/memory/I/O metrics.
+
+Create a named baseline, then compare a later revision:
+
+```bash
+./run-benchmark.bb --output=benchmark-results/baseline
+./run-benchmark.bb --baseline=benchmark-results/baseline --threshold=15
+```
+
+Comparison uses absolute throughput and p95 latency for **each protocol and concurrency**, rather than only their ratio. A throughput drop or p95 increase over the threshold fails the run. Parameters, corpus fingerprints and benchmark user must match; baseline files use this orchestrator's `summary.json` format. No baseline is replaced automatically. Exit codes are **0** for success, **2** for a detected regression, **1** for setup/test/cleanup failures, and **130** for interruption. Existing output directories are rejected.
+
+These are exploratory warm-cache runs, not statistical significance tests. Compare on the same idle host, inspect per-repetition variation and rerun suspected regressions. REST uses HTTP while gRPC uses TLS. Metrics are sampled from Docker; SQL/GC profiling and cold-cache orchestration remain separate work.
+
+`./run-benchmark.bb --help` lists tuning options. For a faster lifecycle smoke test:
+
+```bash
+./run-benchmark.bb --requests=4 --large-requests=4 --warmup=4 --large-warmup=4 --repetitions=1
+```
+
+Babashka automation tests run without Docker using `bb test:benchmark`.
 
 ## Run
 
@@ -90,4 +129,4 @@ These are warm-cache runs: preflight and warmup already touch the corpus. `--lab
 
 Save the ACS/platform revision, user permission profile, fixture sizes/formats, JVM/container settings, host resources, and any background workload alongside results. The runner records the client revision, not the deployed server revision. Observe ACS/database/transform CPU, SQL activity, GC, storage I/O and queue saturation independently; this harness does not infer them from client latency. For example, run `docker stats` in another terminal and use the same server instrumentation for every comparison.
 
-No live baseline is checked into this repository. Search, mutations, bulk/batch operations, version histories, automatic fixture preparation, cold-cache orchestration and server profiling are follow-up work. Establish this read-only baseline first, then extend scenarios while preserving equivalent response fields, permission checks and transaction semantics.
+No live baseline is checked into this repository. The automated Docker runner prepares download fixtures; search, mutations, bulk/batch operations, version histories, cold-cache orchestration and detailed server profiling are follow-up work. Establish this read-only baseline first, then extend scenarios while preserving equivalent response fields, permission checks and transaction semantics.
