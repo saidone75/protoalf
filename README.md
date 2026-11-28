@@ -15,6 +15,7 @@ Work in progress.
 
 The shared contract is in [`proto/protoalf/v1/alfresco.proto`](proto/protoalf/v1/alfresco.proto).
 API details are in the [Javadoc](https://saidone75.github.io/protoalf/javadoc/).
+Folder listings can skip exact totals; existing calls keep exact counting by default.
 
 ## Build and run
 

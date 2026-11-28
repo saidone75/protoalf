@@ -111,3 +111,42 @@
       (reset! (:cancelled? context) true)
       (is (thrown? clojure.lang.ExceptionInfo (benchmark/capture! context ["bb" "-e" "(print :unexpected)"])))
       (finally (fs/delete-tree directory)))))
+
+(deftest listing-metrics-use-nodes-per-second-instead-of-content-bytes
+  (let [old (update (baseline) :rows #(mapv (fn [row] (assoc row :size "listing" :scenario "list"
+                                                         :bytes 0 :throughputMiBPerSecond 0 :nodesPerSecond 100)) %))
+        slow (assoc-in old [:rows 1 :nodesPerSecond] 50)]
+    (is (= [false true] (mapv :regression (benchmark/compare-baseline slow old 15))))))
+
+(deftest listing-fixture-is-idempotent-and-detects-modified-metadata
+  (let [entries (atom []) posts (atom 0)
+        args {:listing-items 5 :page-size 2}]
+    (with-redefs [benchmark/child! (fn [& _] {:id "folder"})
+                  benchmark/listing-entries! (fn [& _] (vec (sort-by :name @entries)))
+                  benchmark/request! (fn [_ method _ body]
+                                       (is (= :post method))
+                                       (swap! posts inc)
+                                       (swap! entries conj {:id (:name body) :name (:name body) :nodeType (:nodeType body)
+                                                            :aspectNames (:aspectNames body)
+                                                            :properties (into {} (map (fn [[k v]] [(keyword k) v]) (:properties body)))})
+                                       {:entry (last @entries)})]
+      (let [created (benchmark/listing-fixture! {} args)
+            reused (benchmark/listing-fixture! {} args)]
+        (is (= created reused))
+        (is (= 5 @posts))
+        (is (= 5 (:items created)))
+        (swap! entries assoc-in [0 :properties :cm:description] "changed")
+        (is (thrown? clojure.lang.ExceptionInfo (benchmark/listing-fixture! {} args)))
+        (is (= 5 @posts))))))
+
+(deftest no-count-profile-does-not-require-or-compare-rest-samples
+  (let [fixture {:label "listing-no-count" :scenario "list-no-count" :protocols ["grpc"] :bytes 0 :sha256 "folder"}
+        report {:status "completed" :corpus []
+                :runs (mapv (fn [repetition] {:protocol "grpc" :concurrency 1.0 :repetition repetition
+                                              :errors {} :successes 10 :attempts 10 :contentMiBPerSecond 0
+                                              :successfulUnitsPerSecond 1000 :successfulOperationsPerSecond 10
+                                              :latencyMs {:p95 100}}) [1 2 3])}
+        rows (benchmark/summarize report fixture 3 [1])]
+    (is (= 1 (count rows)))
+    (is (= "grpc" (:protocol (first rows))))
+    (is (= 1000.0 (benchmark/throughput (first rows))))))

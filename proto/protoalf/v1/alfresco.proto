@@ -94,7 +94,8 @@ message PurgeAllArchivedNodesRequest { }
 message PurgeArchivedNodesResponse { int64 purged = 1; }
 
 // FileFolderService
-message ListChildrenRequest { string node_ref = 1; int32 skip_count = 2; int32 max_items = 3; }
+// Omitted count_total preserves exact counting. False skips the count and returns total_items=-1.
+message ListChildrenRequest { string node_ref = 1; int32 skip_count = 2; int32 max_items = 3; optional bool count_total = 4; }
 message ListChildrenResponse { repeated Node entries = 1; bool has_more_items = 2; int64 total_items = 3; }
 message CreateNodeRequest { reserved 4, 6; reserved "property_values"; string parent_ref = 1; string name = 2; string type = 3; Content content = 5; repeated string aspects = 7; map<string, Property> properties = 8; }
 message MoveNodeRequest { string node_ref = 1; string target_parent_ref = 2; string name = 3; }

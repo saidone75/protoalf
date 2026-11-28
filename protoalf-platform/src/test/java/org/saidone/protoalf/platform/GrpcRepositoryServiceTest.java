@@ -21,6 +21,7 @@ import org.alfresco.service.cmr.dictionary.TypeDefinition;
 import org.alfresco.service.cmr.lock.NodeLockedException;
 import org.alfresco.service.cmr.model.FileExistsException;
 import org.alfresco.service.cmr.model.FileFolderService;
+import org.alfresco.service.cmr.model.FileInfo;
 import org.alfresco.service.cmr.repository.ChildAssociationRef;
 import org.alfresco.service.cmr.repository.ContentData;
 import org.alfresco.service.cmr.repository.NodeRef;
@@ -355,6 +356,60 @@ class GrpcRepositoryServiceTest {
         Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> new GrpcFileFolderService(services).list(ListChildrenRequest.newBuilder().setNodeRef(COMPANY_HOME.toString()).build(), result));
         assertNull(result.error);
         assertEquals(-1L, result.value.getTotalItems());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void disablingCountsPreservesPagingAndDoesNotReadTotals() {
+        val services = repository(mock(NodeLocatorService.class));
+        val files = mock(FileFolderService.class);
+        val page = mock(PagingResults.class);
+        when(services.getFileFolderService()).thenReturn(files);
+        when(files.list(any(NodeRef.class), eq(true), eq(true), isNull(), isNull(), anyList(), any(PagingRequest.class))).thenReturn(page);
+        when(page.getPage()).thenReturn(List.of());
+        when(page.hasMoreItems()).thenReturn(true);
+        val result = new Result<ListChildrenResponse>();
+        Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> new GrpcFileFolderService(services).list(ListChildrenRequest.newBuilder().setNodeRef(COMPANY_HOME.toString()).setSkipCount(100).setMaxItems(50).setCountTotal(false).build(), result));
+        assertNull(result.error);
+        assertEquals(-1, result.value.getTotalItems());
+        assertTrue(result.value.getHasMoreItems());
+        verify(page, never()).getTotalResultCount();
+        val captor = ArgumentCaptor.forClass(PagingRequest.class);
+        verify(files).list(any(NodeRef.class), eq(true), eq(true), isNull(), isNull(), anyList(), captor.capture());
+        assertEquals(0, captor.getValue().getRequestTotalCountMax());
+        assertEquals(100, captor.getValue().getSkipCount());
+        assertEquals(50, captor.getValue().getMaxItems());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void listingPermissionCacheIsRecreatedOnTransactionRetry() {
+        val services = repository(mock(NodeLocatorService.class));
+        val files = mock(FileFolderService.class);
+        val page = mock(PagingResults.class);
+        val file = mock(FileInfo.class);
+        val permissions = mock(PermissionService.class);
+        val child = new NodeRef("workspace://SpacesStore/listed-child");
+        when(services.getFileFolderService()).thenReturn(files);
+        when(services.getPermissionService()).thenReturn(permissions);
+        when(files.list(any(NodeRef.class), eq(true), eq(true), isNull(), isNull(), anyList(), any(PagingRequest.class))).thenReturn(page);
+        when(page.getPage()).thenReturn(List.of(file));
+        when(file.getNodeRef()).thenReturn(child);
+        when(file.getType()).thenReturn(ContentModel.TYPE_CONTENT);
+        when(file.getProperties()).thenReturn(Map.of(ContentModel.PROP_NAME, "entry.txt"));
+        when(services.getNodeService().getPrimaryParent(child)).thenReturn(new ChildAssociationRef(ContentModel.ASSOC_CONTAINS, COMPANY_HOME, ContentModel.PROP_NAME, child));
+        when(permissions.hasPermission(COMPANY_HOME, PermissionService.READ_PROPERTIES)).thenReturn(AccessStatus.DENIED, AccessStatus.ALLOWED);
+        when(transactions(services).doInTransaction(any(RetryingTransactionHelper.RetryingTransactionCallback.class), eq(true))).thenAnswer(invocation -> {
+            val work = (RetryingTransactionHelper.RetryingTransactionCallback<?>) invocation.getArgument(0);
+            work.execute();
+            return work.execute();
+        });
+        val result = new Result<ListChildrenResponse>();
+        Context.current().withValue(TicketInterceptor.USER, "reader").run(() -> new GrpcFileFolderService(services).list(ListChildrenRequest.newBuilder().setNodeRef(COMPANY_HOME.toString()).build(), result));
+        assertNull(result.error);
+        assertTrue(result.complete);
+        assertEquals(COMPANY_HOME.toString(), result.value.getEntries(0).getParentRef());
+        verify(permissions, times(2)).hasPermission(COMPANY_HOME, PermissionService.READ_PROPERTIES);
     }
 
     private static RetryingTransactionHelper transactions(ServiceRegistry services) {

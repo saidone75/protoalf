@@ -44,11 +44,11 @@ Review date: 2026-11-26. Only outstanding work is listed.
 
     Keep the single typed map and explicit scalar/list distinction, but move conversion and validation into a dedicated component. Document supported Alfresco datatypes and representations that cannot round-trip without information loss, especially multilingual text and additional dictionary types. Test read/write symmetry and explicit rejection of unsupported types.
 
-8. **Make exact listing counts optional.**
+8. **Exercise listing pagination under concurrent mutations.**
 
     Source: `protoalf-platform/.../GrpcFileFolderService.java`, `list`.
 
-    Every listing requests an exact child count, even when a caller only needs the current page and continuation flag. Make exact counting optional and measure listing/mapping costs for large folders. Define and test pagination behavior when nodes are added, deleted, or renamed between pages.
+    Exact counts are now optional through count_total, with exact counting preserved for existing callers and totalItems=-1 when disabled. Paging offsets, page sizes and continuation are covered by unit tests, and the independent-page semantics are documented. Add live integration cases with concurrent creates, deletes and renames and heterogeneous ACLs to exercise page shifts, omissions and repeated entries across requests; the API does not provide snapshot isolation.
 
 9. **Consolidate startup scripts and escape provisioning JSON correctly.**
 
@@ -64,13 +64,17 @@ Assessment date: 2026-11-27. The goal is to maximize Alfresco throughput and red
 
     Sources: `protoalf-platform/.../NodeMapper.java`, `GrpcFileFolderService.java`, `GrpcSearchService.java`, and the Protobuf contract.
 
-    Listings and searches always map full node snapshots, fetching type, properties, aspects and the primary parent, including a parent permission check for every result. Add explicit field selection and a lightweight response mode for bulk consumers that only need references and names. Skip repository lookups and property conversion for omitted fields. Measure service invocations, SQL queries, allocations and response sizes separately: Alfresco caches mean service calls do not necessarily correspond to SQL queries.
+    Listings and searches still return full node snapshots. Listings now reuse FileInfo type/properties and deduplicate parent permission checks within each page; search still maps individual references. Add explicit field selection and a lightweight response mode for bulk consumers that only need references and names. Skip repository lookups and property conversion for omitted fields. Measure service invocations, SQL queries, allocations and response sizes separately: Alfresco caches mean service calls do not necessarily correspond to SQL queries.
 
-2. **High priority: reuse information already obtained during listing.**
+2. **Follow-up: profile optimized listings with heterogeneous ACLs.**
 
     Sources: `protoalf-platform/.../GrpcFileFolderService.java`, `NodeMapper.java`.
 
-    Listing obtains `FileInfo` objects but passes only their references to the mapper, which reads their metadata again. Reuse available listing data where it satisfies the requested response fields. Cache repeated parent permission decisions within the current request and caller context; do not assume that a listed parent is always the primary parent. Combine this work with code review item 8, which makes exact counts optional. Measure large-folder listings with and without exact totals.
+    Implemented: listings reuse type/properties already returned in secured FileInfo objects, preserve complete snapshots and cache both grants and denials for actual primary parents only within one page transaction attempt. Secondary associations still resolve their real primary parent; permission decisions are not shared between users, requests or retries. Existing calls retain exact totals; count_total=false skips counting and returns -1. Unit tests cover full snapshot equality, permission context, denied parents, transaction retries and client wire compatibility.
+
+    The runner now prepares a stable 1,000-document folder and measures full-response listing pages. Live before/after exact-count runs are retained under ignored benchmark-results/listing-before-20261128 and listing-after-20261128; list-no-count is reported separately as a gRPC-only workload. Remaining work: profile SQL, allocations and ACL filtering on larger folders with realistic mixed permissions. Service call reduction alone does not imply the same reduction in database queries.
+
+    Observed on 2026-11-28 with 100-node pages and three repetitions: median gRPC exact-count throughput increased by 28.4% at concurrency 1 and 39.6% at concurrency 4. The unchanged REST control improved by 11.0% and 6.5%, so not all variation can be attributed to the mapper. Skipping counts added 17.2% and 13.2% over the optimized exact-count profile. All timed pages returned 100 entries without errors. These local warm-cache results are exploratory, not statistical guarantees; comparison.md in the after-run directory records the details.
 
 3. **High priority: avoid repeated text extraction and offer text streaming.**
 
@@ -108,14 +112,16 @@ Assessment date: 2026-11-27. The goal is to maximize Alfresco throughput and red
 
     Version history always returns every version with a complete frozen-node snapshot. Add a metadata-only mode and optional snapshot expansion, and investigate bounded history retrieval for documents with many versions. For trashcan purges, implement the bounded background processing described in code review item 3 instead of collecting all references and purging them in one transaction.
 
-9. **Establish a reproducible REST versus gRPC benchmark.**
+9. **Extend the REST versus gRPC benchmark and server profiling (partially completed).**
 
     Sources: benchmark tooling, live ACS test infrastructure and CI reporting.
 
-    Initial read-only harness: `protoalf-client/src/test/benchmark/run.sh` (instructions in `doc/BENCHMARK.md`). It covers full-node reads, first-page listings, binary transfers, and a separate gRPC-only paged-text scenario, with preflight checks, warmup, concurrency, repetitions, raw samples and JSON summaries. The harness is tested against fake HTTP/gRPC servers; a live ACS baseline, additional workloads and server profiling remain outstanding.
+    Completed: the read-only harness in `protoalf-client/src/test/benchmark/run.sh` supports full-node reads, first-page listings, binary transfers and a separate gRPC-only paged-text scenario, with preflight checks, warmup, concurrency, repetitions, raw samples and JSON summaries. It is tested against fake HTTP/gRPC servers, and live ACS runs have exercised node reads, listings and downloads. Instructions are in `doc/BENCHMARK.md`.
 
-    Automated download regression runner: `./run-benchmark.bb` builds/tests the project, recreates Docker, prepares stable 10 KiB/1 MiB/100 MiB fixtures, writes Markdown/JSON reports and stops containers while retaining volumes. It can compare absolute throughput and p95 against a saved baseline and fail on a configurable regression threshold.
+    Completed: `./run-benchmark.bb` builds/tests the project, recreates Docker, prepares stable 10 KiB/1 MiB/100 MiB fixtures and a populated listing folder, writes aligned terminal, Markdown and JSON reports and stops containers while retaining volumes. The full lifecycle has been validated against live ACS. It compares absolute throughput (MiB/s for downloads, nodes/s for listings) and p95 against a saved baseline and can fail on a configurable regression threshold. Exact-count full-response listings and the gRPC-only no-count profile are separate workloads. Results and raw samples are kept in ignored `benchmark-results/` directories; no baseline is committed. Runs currently use warm caches on localhost, with REST HTTP and gRPC TLS.
 
-    Next step: run the benchmark against a live ACS instance and save a baseline before implementing extraction caching. Use a stable document corpus and the same user for REST and gRPC; record deployed ACS/platform versions, configuration, raw samples and server metrics.
+    Next step: keep the unchanged exact-count full-response profile as the reference for listing comparisons and measure selective responses separately. Before implementing extraction caching, establish a live PDF/Office text-extraction baseline: binary download results do not measure transformation cost. Add automated node-read, search, write, upload, bulk/batch and version-history workloads as the corresponding optimizations are introduced.
+
+    Outstanding: controlled cold-cache runs, detailed SQL/GC/allocation and queue profiling, and performance result reporting in CI. Docker CPU/memory/I/O sampling is already available, but does not replace that profiling. Repeated runs have shown variation, so confirm suspected regressions on the same idle host rather than treating a single threshold failure as proof.
 
     Compare equivalent operations with the same user permissions, response fields, content, cache conditions and consistency requirements. Cover metadata reads, large-folder listing, search, writes, bulk workloads, binary transfers and text extraction. Record nodes/s, MB/s, p50/p95/p99 latency, errors, SQL activity, CPU, allocations/GC and queue saturation across concurrency levels, with cold and warm caches. Separate transport savings from reduced repository work; use the baseline to validate the priorities above and detect regressions.

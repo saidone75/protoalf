@@ -59,21 +59,24 @@ public final class GrpcFileFolderService extends FileFolderServiceGrpc.FileFolde
 
     /**
      * Lists files and folders directly under a parent, sorted by name. A zero page size selects 100; explicit
-     * sizes must be 1..1000. The total is permission filtered, or -1 when unavailable.
+     * sizes must be 1..1000. Exact permission-filtered counting is the default for existing callers. Explicitly
+     * disabling count_total skips the count request and returns -1 while preserving entries and continuation.
+     * Each page is a separate repository read; concurrent creates, deletes or renames may shift later offsets.
      *
-     * @param request parent node reference, non-negative skip count and optional page size
+     * @param request parent reference, non-negative skip count, page size and optional exact-count selection
      * @param observer receives one page with entries, continuation flag and total count, or a gRPC error
      */
     @Override public void list(ListChildrenRequest request, StreamObserver<ListChildrenResponse> observer) {
         support.execute(observer, () -> {
             val size = GrpcServiceSupport.pageSize(request.getSkipCount(), request.getMaxItems());
+            val countTotal = !request.hasCountTotal() || request.getCountTotal();
             val paging = new PagingRequest(request.getSkipCount(), size);
-            // Same as the Alfresco REST API: ask for the exact (permission filtered) number of children.
-            paging.setRequestTotalCountMax(Integer.MAX_VALUE);
+            paging.setRequestTotalCountMax(countTotal ? Integer.MAX_VALUE : 0);
             val page = services.getFileFolderService().list(support.ref(request.getNodeRef()), true, true, null, null, List.of(new Pair<>(ContentModel.PROP_NAME, true)), paging);
-            val total = page.getTotalResultCount();
+            val total = countTotal ? page.getTotalResultCount() : null;
             val response = ListChildrenResponse.newBuilder().setHasMoreItems(page.hasMoreItems()).setTotalItems(total == null || total.getFirst() == null ? -1 : total.getFirst());
-            for (val file : page.getPage()) response.addEntries(mapper.map(file.getNodeRef()));
+            val listing = mapper.listing();
+            for (val file : page.getPage()) response.addEntries(listing.map(file));
             return response.build();
         });
     }

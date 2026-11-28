@@ -65,6 +65,22 @@ public class FileFolderServiceClient {
     }
 
     /**
+     * Lists a page with optional exact counting. Disabling the count returns totalItems=-1 and preserves the
+     * continuation flag and complete node snapshots. Pages are independent reads, so concurrent mutations can
+     * shift subsequent offsets. Requires a platform version supporting count_total; older servers ignore it.
+     *
+     * @param nodeRef parent reference, bare workspace ID or supported alias
+     * @param skipCount non-negative number of entries to skip
+     * @param maxItems page size in 1..1000; zero selects the server default
+     * @param countTotal true to request an exact permission-filtered total, false to skip counting
+     * @return the full result page and continuation flag, with -1 total when counting is disabled
+     */
+    public ListChildrenResponse list(String nodeRef, int skipCount, int maxItems, boolean countTotal) {
+        val request = ListChildrenRequest.newBuilder().setNodeRef(nodeRef).setSkipCount(skipCount).setMaxItems(maxItems).setCountTotal(countTotal).build();
+        return support.call(stub, s -> s.list(request));
+    }
+
+    /**
      * Creates a document or folder with optional properties, aspects and document content.
      *
      * @param parentRef reference or alias of the destination parent folder

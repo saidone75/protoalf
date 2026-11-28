@@ -16,7 +16,7 @@ The same runner is also available as `bb benchmark`. This command builds and tes
 
 The corpus is fixed: **small 10 KiB, medium 1 MiB, large 100 MiB**, with deterministic, poorly compressible bytes. Fixtures are created once under the benchmark user's home in `Benchmark` and reused. Fixture names and generation are versioned; a different corpus version requires a new baseline. Existing content is never overwritten: sizes and preflight SHA-256 fingerprints must match. Upload preparation is outside measurements. The default user is `mcp`, with `BENCH_PASSWORD` falling back to `MCP_ALFRESCO_PASSWORD` or the stack default `example`. For a custom Compose password, export `MCP_ALFRESCO_PASSWORD` before running; `BENCH_USERNAME`/`BENCH_PASSWORD` can select another existing repository user. The orchestrator always targets the local stack on REST 8080 and gRPC 9090 and reads its TLS CA automatically.
 
-Defaults reproduce the manual download runs: concurrency **1,4**, three repetitions, 100 measured requests/20 warmups per cell for small and medium files, and 8 requests/4 warmups for large files. Results go to `benchmark-results/<UTC timestamp>/`, which survives Maven clean and is ignored by Git:
+Defaults use concurrency **1,4**, three repetitions, 100 measured requests/20 warmups per cell for small and medium files and listings, and 8 requests/4 warmups for large files. Both download and listing scenarios run by default. Results go to `benchmark-results/<UTC timestamp>/`, which survives Maven clean and is ignored by Git:
 
 - `report.md`: REST/gRPC throughput table, gRPC/REST ratios, p95 latency, outcome and optional baseline comparison.
 - `report.txt`: aligned terminal tables with borders and right-aligned numeric columns; printed automatically at the end of the run. Markdown tables are padded for readable source as well.
@@ -42,6 +42,22 @@ These are exploratory warm-cache runs, not statistical significance tests. Compa
 ```
 
 Babashka automation tests run without Docker using `bb test:benchmark`.
+
+### Listing measurements
+
+The runner also prepares a separate `Benchmark/listing-v1-1000` folder containing 1,000 stable, named documents with title and description metadata. Existing nodes are reused and unexpected or modified fixture data is rejected. The fixture fingerprint includes ordered IDs, names, types, metadata and aspects. `--listing-items` changes the population (up to 10,000); `--page-size` selects 1..1000 entries per page. Listing reports use **nodes/s** and per-page p95, not content MiB/s.
+
+```bash
+./run-benchmark.bb --scenarios=list --output=benchmark-results/listing-baseline
+./run-benchmark.bb --scenarios=list --baseline=benchmark-results/listing-baseline
+./run-benchmark.bb --scenarios=list,list-no-count
+```
+
+`list` returns the unchanged full-node response and requests exact totals in both REST and gRPC; use it for before/after mapping comparisons. `list-no-count` is a separate gRPC-only workload: it keeps full node entries and `hasMoreItems`, skips exact counting and returns `totalItems=-1`. It is not presented as an equivalent REST comparison. An older server can ignore the new optional count flag, so use a rebuilt platform for this profile.
+
+The Java client exposes `list(parent, skipCount, maxItems, false)` to skip counts. The existing three-argument overload leaves the wire option absent and retains exact totals. The platform reuses type/properties from the secured `FileInfo` and caches grants and denials only within one page transaction attempt. It still resolves each actual primary parent, including secondary-association cases. There is no cache shared between users, calls or transaction retries.
+
+Pages are separate reads ordered by name. Concurrent creates, deletes or renames can shift offsets, causing omissions or repeated entries across pages; this API does not provide a repository snapshot. Keep fixtures unchanged during measurements. Stable traversal requires quiesced mutations or an application-level snapshot; restarting alone does not provide snapshot isolation.
 
 ## Run
 
@@ -129,4 +145,4 @@ These are warm-cache runs: preflight and warmup already touch the corpus. `--lab
 
 Save the ACS/platform revision, user permission profile, fixture sizes/formats, JVM/container settings, host resources, and any background workload alongside results. The runner records the client revision, not the deployed server revision. Observe ACS/database/transform CPU, SQL activity, GC, storage I/O and queue saturation independently; this harness does not infer them from client latency. For example, run `docker stats` in another terminal and use the same server instrumentation for every comparison.
 
-No live baseline is checked into this repository. The automated Docker runner prepares download fixtures; search, mutations, bulk/batch operations, version histories, cold-cache orchestration and detailed server profiling are follow-up work. Establish this read-only baseline first, then extend scenarios while preserving equivalent response fields, permission checks and transaction semantics.
+No live baseline is checked into this repository. The automated Docker runner prepares download and populated-listing fixtures; search, mutations, bulk/batch operations, version histories, cold-cache orchestration and detailed server profiling are follow-up work. Establish this read-only baseline first, then extend scenarios while preserving equivalent response fields, permission checks and transaction semantics.
